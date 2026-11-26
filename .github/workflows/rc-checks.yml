@@ -1,7 +1,7 @@
 name: RC checks
 on:
   push:
-    branches: [main, voice-dictionary-setup, rc2-model-download, timing-profiles]
+    branches: [main, voice-dictionary-setup, rc2-model-download, timing-profiles, prepare-prefixes]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -47,28 +47,12 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
-  cancel-obsolete-rc4:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Cancel obsolete RC4 publication
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          run=45821578517
-          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .status)" != completed ]]; then
-            gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run/cancel" || true
-          fi
-
   publish-rc:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [windows, cancel-obsolete-rc4]
+    needs: windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -87,32 +71,10 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$(node -p "require('./package.json').version")"
-          if [[ "$tag" != "v1.1.0-rc.3" ]]; then exit 0; fi
-          # User requested updating RC3 rather than publishing RC4.
-          # Never modify a release when a newer main commit has superseded this run.
+          if [[ "$tag" != "v1.1.0-rc.4" ]]; then exit 0; fi
           [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" == "$GITHUB_SHA" ]] || exit 0
-          obsolete_run=45821578517
-          for attempt in {1..30}; do
-            [[ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$obsolete_run" --jq .status)" == completed ]] && break
-            sleep 2
-          done
-          [[ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$obsolete_run" --jq .status)" == completed ]]
-          obsolete_tag=v1.1.0-rc.4
-          obsolete_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$obsolete_tag" --jq .object.sha 2>/dev/null || true)"
-          if [[ "$obsolete_sha" == 7bebf68d9c07d1b222c8c9ec0448ed9526f64dff ]]; then
-            if gh release view "$obsolete_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release delete "$obsolete_tag" --repo "$GITHUB_REPOSITORY" --yes
-            fi
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$obsolete_tag"
-          fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            old_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)"
-            if [[ "$old_sha" == 281eff11c03524b3b33a50436ef4df5be60295c5 ]]; then
-              gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" -f sha="$GITHUB_SHA" -F force=false
-              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "Voice Invoker 1.1.0-rc.3" --notes-file RELEASE_NOTES.md --prerelease
-            else
-              echo "RC3 already updated or tag changed; no further retagging."
-            fi
+            echo "Release $tag already exists; not overwriting."
             exit 0
           fi
-          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.3" --notes-file RELEASE_NOTES.md
+          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.4" --notes-file RELEASE_NOTES.md
