@@ -66,7 +66,15 @@ async function ready(previous=0) {
   const running = id => { try { process.kill(id,0); return true; } catch(e) { if(e.code==='ESRCH') return false; throw e; } };
   await waitFor('both background supervisors exited',()=>!running(supervisor)&&!running(duplicate));
   const dist=path.dirname(exe),moved=dist+'.lifecycle-check';
-  fs.renameSync(dist,moved);fs.renameSync(moved,dist);
+  // Windows can release executable mapping / antivirus handles shortly after the
+  // last process exits. Require a real rename, within a bounded grace period.
+  const releasedAt=Date.now();
+  await waitFor('runtime directory released',()=>{
+    try { fs.renameSync(dist,moved); return true; }
+    catch (e) { if (['EPERM','EBUSY','EACCES'].includes(e.code)) return false; throw e; }
+  },15000);
+  fs.renameSync(moved,dist);
+  console.log('Runtime files released after',Date.now()-releasedAt,'ms');
   console.log('PASS: launcher exited, duplicate blocked, settings visible, detached supervised restart, cached model, normal quit, zero Electron processes and supervisors, runtime directory rename');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{
   for(const id of pids()) {try{execFileSync('taskkill.exe',['/PID',String(id),'/T','/F'],{stdio:'ignore'});}catch{}}
