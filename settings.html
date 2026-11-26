@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Invoke — настройки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@500&display=swap" rel="stylesheet">
+<style>
+  /* Та же палитра, что в overlay.html */
+  :root {
+    --bg-hi: #1b2126; --bg-lo: #0b0e11;
+    --edge: #3a444d; --text: #e6ecef; --muted: #7d8a94; --dim: #39424a;
+    --accent: #5fb4ea; --ready: #6fbf45; --bad: #e0463a; --gold: #e9bf62;
+    --q: #3fa9f5; --w: #d25cf0; --e: #ff9a2e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px 24px 96px; background: var(--bg-lo); color: var(--text);
+    font-family: "Barlow", "Segoe UI", sans-serif; font-size: 15px; user-select: none;
+  }
+  h1, h2 { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; text-transform: uppercase; letter-spacing: .12em; margin: 0; }
+  h1 {
+    font-size: 26px; color: transparent; display: inline-block;
+    background: linear-gradient(180deg, #fff3cf 0%, #f2cf7d 45%, #c7912f 60%, #e9bf62 100%);
+    -webkit-background-clip: text; background-clip: text;
+  }
+  h2 { font-size: 17px; color: var(--muted); margin: 26px 0 10px; }
+  p.hint { color: var(--muted); margin: 6px 0 0; line-height: 1.4; }
+  .panel {
+    background: linear-gradient(180deg, var(--bg-hi), var(--bg-lo));
+    border: 1px solid #000; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05), 0 0 0 1px var(--edge);
+    padding: 6px 14px;
+  }
+  .row { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid #12171b; }
+  .row:last-child { border-bottom: 0; }
+  .row .label { flex: 1; min-width: 0; }
+  .row .sub { color: var(--muted); font-size: 13px; }
+  button.key {
+    min-width: 92px; height: 34px; padding: 0 12px; cursor: pointer;
+    font: 700 17px "Barlow Condensed", sans-serif; letter-spacing: .08em; color: var(--text);
+    background: #05070a; border: 1px solid #000; box-shadow: 0 0 0 1px var(--edge);
+  }
+  button.key:hover { box-shadow: 0 0 0 1px var(--accent); }
+  button.key.empty { color: var(--dim); font-weight: 500; }
+  button.key.wait { color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+  button.key.conflict { color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
+  .opts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .opts label {
+    padding: 7px 12px; cursor: pointer; background: #05070a; box-shadow: 0 0 0 1px var(--edge);
+    display: inline-flex; gap: 8px; align-items: center;
+  }
+  .opts input { accent-color: var(--accent); margin: 0; }
+  .mic { display: flex; gap: 12px; align-items: center; }
+  #mic {
+    flex: 1; min-width: 0; height: 36px; padding: 0 10px; color: var(--text); font: 500 15px "Barlow", sans-serif;
+    background: #05070a; border: 1px solid #000; box-shadow: 0 0 0 1px var(--edge); outline: none;
+  }
+  #mic:focus { box-shadow: 0 0 0 1px var(--accent); }
+  .meter { width: 120px; height: 8px; flex: none; background: #05070a; border: 1px solid #000; box-shadow: 0 0 0 1px var(--edge); overflow: hidden; }
+  #level { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), #bfe3fa); transition: width 60ms linear; }
+  footer {
+    position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 24px; display: flex; gap: 12px; align-items: center;
+    background: linear-gradient(180deg, rgba(11,14,17,.6), var(--bg-lo) 40%); border-top: 1px solid var(--edge);
+  }
+  footer button {
+    height: 40px; padding: 0 18px; cursor: pointer; border: 1px solid #000;
+    font: 700 16px "Barlow Condensed", sans-serif; letter-spacing: .12em; text-transform: uppercase;
+  }
+  #save { background: #1d2a33; color: var(--text); box-shadow: 0 0 0 1px var(--edge); }
+  #restart { background: linear-gradient(180deg, #4d7f2c, #2f5419); color: #fff; box-shadow: 0 0 0 1px #6fbf45; }
+  footer button:disabled { opacity: .45; cursor: default; }
+  #status { color: var(--muted); flex: 1; text-align: right; font-size: 14px; }
+  #status.bad { color: var(--bad); } #status.ok { color: var(--ready); }
+  @media (max-width: 560px) { body { padding: 16px 16px 120px; } footer { flex-wrap: wrap; padding: 12px 16px; } #status { text-align: left; flex-basis: 100%; } }
+</style>
+</head>
+<body>
+<h1>Voice Invoke · клавиши</h1>
+<p class="hint">Нажми на кнопку, затем на клавишу или кнопку мыши (колёсико, боковые 4 и 5). Esc — отмена. Конфликты подсвечиваются красным.</p>
+
+<h2>Клавиши в Dota</h2>
+<p class="hint">Должны совпадать с твоими настройками в игре.</p>
+<div class="panel" id="dota"></div>
+
+
+
+<h2>Каст</h2>
+<p class="hint">Как у тебя в Dota. При обычном касте плагин после клавиши способности кликает под курсором.</p>
+<div class="opts" style="margin-top: 10px">
+  <label><input type="radio" name="castMode" value="click"> Обычный каст (клавиша + клик)</label>
+  <label><input type="radio" name="castMode" value="quickcast"> Быстрый каст (только клавиша)</label>
+</div>
+
+<h2>Микрофон</h2>
+<div class="mic">
+  <select id="mic"><option value="">Стандартный (как в Windows)</option></select>
+  <div class="meter"><div id="level"></div></div>
+</div>
+<p class="hint">Говори — полоска должна двигаться. Новый микрофон заработает после перезапуска.</p>
+<div class="opts" style="margin-top: 10px">
+  <label><input type="radio" name="listen" value="hold"> Пока зажата клавиша голосового чата</label>
+  <label><input type="radio" name="listen" value="always"> Всегда</label>
+</div>
+
+<h2>Запретить нажимать руками</h2>
+<div class="opts">
+  <label><input type="checkbox" name="block" value="invoke"> Invoke</label>
+  <label><input type="checkbox" name="block" value="slot1"> Слот 1</label>
+  <label><input type="checkbox" name="block" value="slot2"> Слот 2</label>
+</div>
+
+<footer>
+  <button id="save">Сохранить</button>
+  <button id="restart">Сохранить и перезапустить</button>
+  <span id="status"></span>
+</footer>
+
+<script>
+  const DOTA = [
+    ['quas', 'Quas', 'сфера льда'], ['wex', 'Wex', 'сфера молний'], ['exort', 'Exort', 'сфера огня'],
+    ['invoke', 'Invoke', ''], ['slot1', 'Слот 1', 'первая собранная способность'], ['slot2', 'Слот 2', 'вторая собранная способность'],
+    ['voice', 'Голосовой чат', 'зажимаешь — плагин слушает'],
+  ];
+  // KeyboardEvent.code -> имя клавиши, как его понимает logic.js (vkOf)
+  const CODE_NAMES = {
+    Space: 'SPACE', Tab: 'TAB', CapsLock: 'CAPSLOCK', Backquote: '`', Minus: '-', Equal: '=',
+    BracketLeft: '[', BracketRight: ']', Backslash: '\\', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/',
+    Insert: 'INSERT', Delete: 'DELETE', Home: 'HOME', End: 'END', PageUp: 'PAGEUP', PageDown: 'PAGEDOWN',
+    ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+    NumpadMultiply: 'NUM*', NumpadAdd: 'NUM+', NumpadSubtract: 'NUM-', NumpadDecimal: 'NUM.', NumpadDivide: 'NUM/',
+  };
+  // MouseEvent.button -> имя: 1 — колёсико, 3 и 4 — боковые кнопки
+  const MOUSE_NAMES = { 1: 'MOUSE3', 3: 'MOUSE4', 4: 'MOUSE5' };
+  const PRETTY = { MOUSE3: 'Колёсико', MOUSE4: 'Мышь 4', MOUSE5: 'Мышь 5' };
+  function keyName(code) {
+    let m;
+    if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
+    if ((m = /^Digit(\d)$/.exec(code))) return m[1];
+    if ((m = /^Numpad(\d)$/.exec(code))) return 'NUM' + m[1];
+    if (/^F([1-9]|1\d|2[0-4])$/.test(code)) return code;
+    return CODE_NAMES[code] || '';
+  }
+
+  const state = { keys: {}, voice: '' };
+  let waiting = null; // { id, btn }
+  const $ = (s) => document.querySelector(s);
+  const status = (text, cls = '') => { $('#status').textContent = text; $('#status').className = cls; };
+
+  const getKey = (id) => (id === 'voice' ? state.voice : state.keys[id] || '');
+  function setKey(id, key) {
+    if (id === 'voice') state.voice = key;
+    else state.keys[id] = key;
+    status('Есть несохранённые изменения');
+    render();
+  }
+
+  function keyButton(id) {
+    const b = document.createElement('button');
+    b.className = 'key';
+    b.dataset.id = id;
+    b.onclick = () => {
+      if (waiting) waiting.btn.classList.remove('wait');
+      waiting = { id, btn: b };
+      b.classList.add('wait');
+      b.textContent = 'Нажми…';
+    };
+    return b;
+  }
+
+  function build() {
+    const dota = $('#dota');
+    for (const [id, name, sub] of DOTA) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<div class="label">${name}${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
+      row.append(keyButton(id));
+      dota.append(row);
+    }
+  }
+
+  // Одна клавиша на два действия — конфликт
+  function conflicts() {
+    const uses = {};
+    const add = (key, who) => key && (uses[key] = uses[key] || []).push(who);
+    for (const [id] of DOTA) add(getKey(id), id);
+    const bad = new Set();
+    for (const list of Object.values(uses)) if (list.length > 1) list.forEach((w) => bad.add(w));
+    return bad;
+  }
+
+  function render() {
+    const bad = conflicts();
+    for (const b of document.querySelectorAll('button.key')) {
+      if (waiting && waiting.btn === b) continue;
+      const key = getKey(b.dataset.id);
+      b.textContent = PRETTY[key] || key || '—';
+      b.classList.toggle('empty', !key);
+      b.classList.toggle('conflict', bad.has(b.dataset.id));
+    }
+    const ok = bad.size === 0;
+    $('#save').disabled = $('#restart').disabled = !ok;
+    if (!ok) status('Одна клавиша назначена на несколько действий', 'bad');
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (!waiting) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const { id, btn } = waiting;
+    if (e.code === 'Escape') {
+      waiting = null; btn.classList.remove('wait'); return render();
+    }
+    // Ctrl/Alt/Shift сами по себе не назначаются: ждём основную клавишу
+    if (/^(Control|Alt|Shift|Meta)/.test(e.code)) return;
+    const name = keyName(e.code);
+    if (!name) return status('Эту клавишу назначить нельзя', 'bad');
+    waiting = null; btn.classList.remove('wait');
+    setKey(id, name);
+  }, true);
+
+  // Кнопки мыши: колёсико и боковые назначаются, левый/правый клик просто отменяет ожидание
+  window.addEventListener('mousedown', (e) => {
+    if (!waiting) return;
+    const { id, btn } = waiting;
+    const name = MOUSE_NAMES[e.button];
+    waiting = null; btn.classList.remove('wait');
+    if (!name) return render();
+    e.preventDefault();
+    setKey(id, name);
+  }, true);
+  // Боковые кнопки в браузере — «назад/вперёд»: на странице настроек это не нужно
+  window.addEventListener('mouseup', (e) => { if (e.button === 3 || e.button === 4) e.preventDefault(); }, true);
+
+  // ---------- Выбор микрофона и индикатор уровня ----------
+  // Устройство храним по названию: id устройств в браузере могут меняться
+  let micStream = null, micCtx = null;
+  async function initMic(saved) {
+    const sel = $('#mic');
+    try {
+      // Без разрешения на микрофон браузер не отдаёт названия устройств
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach((t) => t.stop());
+    } catch (e) {}
+    const devices = (await navigator.mediaDevices.enumerateDevices())
+      .filter((d) => d.kind === 'audioinput' && d.label && d.deviceId !== 'default' && d.deviceId !== 'communications');
+    for (const d of devices) sel.add(new Option(d.label, d.label));
+    if (saved && !devices.some((d) => d.label === saved)) sel.add(new Option(saved + ' (не подключён)', saved));
+    sel.value = saved;
+    sel.onchange = () => { status('Есть несохранённые изменения'); meter(); };
+    meter();
+  }
+
+  async function meter() {
+    if (micStream) micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+    const label = $('#mic').value;
+    const dev = label && (await navigator.mediaDevices.enumerateDevices()).find((d) => d.kind === 'audioinput' && d.label === label);
+    if (label && !dev) return ($('#level').style.width = '0');
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: dev ? { deviceId: { exact: dev.deviceId } } : true });
+    } catch (e) {
+      return status('Микрофон недоступен: ' + e.message, 'bad');
+    }
+    micCtx = micCtx || new AudioContext();
+    const an = micCtx.createAnalyser();
+    an.fftSize = 1024;
+    micCtx.createMediaStreamSource(micStream).connect(an);
+    const buf = new Float32Array(an.fftSize);
+    const own = micStream;
+    (function tick() {
+      if (micStream !== own) return;
+      an.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      $('#level').style.width = Math.min(100, Math.sqrt(sum / buf.length) * 400) + '%';
+      requestAnimationFrame(tick);
+    })();
+  }
+
+  function collect() {
+    return {
+      keys: state.keys,
+      voiceChatKey: state.voice,
+      castMode: document.querySelector('input[name=castMode]:checked')?.value,
+      listen: document.querySelector('input[name=listen]:checked')?.value,
+      microphone: $('#mic').value,
+      blockKeys: [...document.querySelectorAll('input[name=block]:checked')].map((i) => i.value),
+    };
+  }
+
+  async function save() {
+    const res = await fetch('/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collect()),
+    });
+    const r = await res.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.error || 'HTTP ' + res.status);
+  }
+
+  $('#save').onclick = async () => {
+    try { await save(); status('Сохранено. Новые клавиши заработают после перезапуска.', 'ok'); }
+    catch (e) { status('Не сохранилось: ' + e.message, 'bad'); }
+  };
+  $('#restart').onclick = async () => {
+    try {
+      await save();
+      status('Сохранено, перезапускаю…', 'ok');
+      await fetch('/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    } catch (e) { status('Не сохранилось: ' + e.message, 'bad'); }
+  };
+  document.addEventListener('change', () => status('Есть несохранённые изменения'));
+
+  fetch('/config').then((r) => r.json()).then((c) => {
+    state.keys = { ...c.keys };
+    state.voice = String(c.voiceChatKey || '').toUpperCase();
+    for (const k of Object.keys(state.keys)) state.keys[k] = String(state.keys[k]).toUpperCase();
+    const pick = (name, v) => { const i = document.querySelector(`input[name=${name}][value="${v}"]`); if (i) i.checked = true; };
+    pick('castMode', c.castMode);
+    pick('listen', c.listen);
+    for (const n of c.blockKeys) pick('block', n);
+    initMic(c.microphone || '');
+    build();
+    render();
+  }).catch(() => status('Плагин не запущен: открой эту страницу через start.bat', 'bad'));
+</script>
+</body>
+</html>

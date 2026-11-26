@@ -1,0 +1,17 @@
+{
+  "name": "voice-invoke",
+  "version": "1.0.0",
+  "description": "Перед Invoke нужно произнести название способности вслух — клавиши Dota блокируются, пока не скажешь верно",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "koffi": "^2.9.0",
+    "vosk-browser": "^0.0.8"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  }
+}

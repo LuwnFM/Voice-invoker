@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Voice Invoke</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@500&display=swap" rel="stylesheet">
+<style>
+  /* Палитра интерфейса Dota 2: тёмный сланец, стальные грани, голубой акцент */
+  :root {
+    --bg-hi: #1b2126; --bg-lo: #0b0e11;
+    --head-hi: #232a31; --head-lo: #171c21;
+    --edge: #3a444d; --edge-lo: #000;
+    --text: #e6ecef; --muted: #7d8a94; --dim: #39424a;
+    --accent: #5fb4ea; --ready: #6fbf45; --bad: #e0463a; --gold: #e9bf62;
+    --q: #3fa9f5; --w: #d25cf0; --e: #ff9a2e;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --scale: 1;
+  }
+  html, body {
+    margin: 0; width: 100%; height: 100%; overflow: hidden;
+    background: transparent; color: var(--text); user-select: none;
+    font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  }
+  .panel {
+    background: linear-gradient(180deg, var(--bg-hi), var(--bg-lo));
+    border: 1px solid var(--edge-lo);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .05), 0 0 0 1px var(--edge),
+                0 14px 36px rgba(0, 0, 0, .75);
+  }
+  .title {
+    font-size: 22px; font-weight: 700; line-height: 1; letter-spacing: .16em; text-transform: uppercase;
+    color: transparent; background: linear-gradient(180deg, #fff3cf 0%, #f2cf7d 45%, #c7912f 60%, #e9bf62 100%);
+    -webkit-background-clip: text; background-clip: text;
+    filter: drop-shadow(0 0 6px rgba(240, 190, 90, .45)) drop-shadow(0 1px 1px #000);
+  }
+
+  /* ---------- Индикатор «слушаю» ---------- */
+  #mic {
+    position: absolute; left: 50%; top: 14%;
+    transform: translateX(-50%) scale(var(--scale)); transform-origin: top center;
+    display: none; align-items: center; gap: 12px; min-width: 300px;
+    padding: 6px 16px 6px 10px;
+    border-left: 3px solid var(--accent);
+  }
+  #mic.on { display: flex; }
+  #mic svg { width: 20px; height: 20px; fill: var(--accent); flex: none; filter: drop-shadow(0 0 4px rgba(95, 180, 234, .6)); }
+  .meter {
+    width: 64px; height: 6px; flex: none; overflow: hidden;
+    background: #05070a; border: 1px solid #000; box-shadow: 0 0 0 1px var(--edge);
+  }
+  #level { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), #bfe3fa); transition: width 60ms linear; }
+  #partial {
+    font-size: 20px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); white-space: nowrap; text-shadow: 0 2px 2px #000;
+  }
+  #partial.heard { color: var(--text); }
+
+  /* ---------- Применённая способность: компактная плашка над прицелом ---------- */
+  /* left/top задаются в render — точка над курсором в момент каста */
+  #cast {
+    position: absolute; left: 50%; top: 22%;
+    transform: translate(-50%, -100%) scale(var(--scale)); transform-origin: bottom center;
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 14px 6px 6px;
+    opacity: 0; pointer-events: none;
+  }
+  #cast.show { animation: castfloat 900ms ease-out; }
+  #castIcon {
+    display: block; width: 50px; height: 50px; flex: none;
+    border: 1px solid #000; box-shadow: 0 0 0 1px var(--edge);
+  }
+  .castText { display: flex; flex-direction: column; gap: 4px; }
+  #castName {
+    font-size: 24px; font-weight: 600; line-height: 1; letter-spacing: .04em;
+    text-transform: uppercase; white-space: nowrap; text-shadow: 0 2px 2px #000;
+  }
+  @keyframes castfloat {
+    0% { opacity: 0; transform: translate(-50%, -100%) translateY(6px) scale(var(--scale)); }
+    12% { opacity: 1; transform: translate(-50%, -100%) scale(var(--scale)); }
+    50% { opacity: 1; transform: translate(-50%, -100%) scale(var(--scale)); }
+    100% { opacity: 0; transform: translate(-50%, -100%) translateY(-24px) scale(var(--scale)); }
+  }
+
+  /* ---------- Хитмаркер у курсора в момент каста ---------- */
+  #aim {
+    position: absolute; width: 52px; height: 52px; margin: -26px 0 0 -26px;
+    display: none; pointer-events: none;
+  }
+  #aim.show { display: block; animation: hitmarker 420ms ease-out forwards; }
+  #aim svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  @keyframes hitmarker {
+    0% { opacity: 1; transform: scale(1.35); }
+    15% { opacity: 1; transform: scale(1); }
+    60% { opacity: 1; }
+    100% { opacity: 0; transform: scale(1); }
+  }
+
+  /* ---------- Анимация на весь экран за убийство с Sun Strike ---------- */
+  #kill { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; pointer-events: none; }
+  #kill.show { display: block; }
+  #killVideo { display: none; }
+
+  /* ---------- Статус загрузки ---------- */
+  #status {
+    position: absolute; top: 12px; left: 12px; display: none;
+    padding: 6px 14px; font-size: 16px; font-weight: 600; letter-spacing: .05em;
+    border-left: 3px solid var(--accent);
+  }
+  #status.on { display: block; }
+  #status.bad { color: var(--bad); border-left-color: var(--bad); }
+
+  #toast {
+    position: absolute; left: 50%; top: 18%;
+    transform: translateX(-50%) translateY(-4px);
+    font-size: 26px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    text-shadow: 0 2px 6px #000, 0 0 2px #000;
+    opacity: 0; white-space: nowrap;
+    transition: opacity 150ms ease, transform 150ms var(--ease-out);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%); transition-duration: 200ms; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #cast.show { animation-name: fadeonly; }
+    #toast { transform: translateX(-50%); }
+  }
+  @keyframes fadeonly {
+    0% { opacity: 0; transform: translate(-50%, -100%) scale(var(--scale)); }
+    12%, 50% { opacity: 1; transform: translate(-50%, -100%) scale(var(--scale)); }
+    100% { opacity: 0; transform: translate(-50%, -100%) scale(var(--scale)); }
+  }
+</style>
+</head>
+<body>
+<div id="mic" class="panel">
+  <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+  <div class="meter"><div id="level"></div></div>
+  <div id="partial">назови способность…</div>
+</div>
+<div id="cast" class="panel">
+  <img id="castIcon" alt="">
+  <div class="castText">
+    <span class="title">Sharlottka</span>
+    <div id="castName"></div>
+  </div>
+</div>
+<div id="aim">
+  <svg viewBox="0 0 52 52" fill="none" stroke-linecap="round">
+    <g stroke="#000" stroke-width="8"><path d="M4 4L18 18M48 4L34 18M4 48L18 34M48 48L34 34"/></g>
+    <g stroke="#fff" stroke-width="5"><path d="M4 4L18 18M48 4L34 18M4 48L18 34M48 48L34 34"/></g>
+  </svg>
+</div>
+<canvas id="kill"></canvas>
+<video id="killVideo" src="/media/sunstrike-kill.mp4" preload="auto" playsinline></video>
+<div id="status" class="panel"></div>
+<div id="toast"></div>
+
+<script src="/vosk.js"></script>
+<script>
+  const params = new URLSearchParams(location.search);
+  document.documentElement.style.setProperty('--scale', params.get('scale') || '1');
+  const soundOn = params.get('sound') === '1';
+  // Распознавание работает только в окне поверх игры (?voice=1), не в OBS
+  const VOICE = params.get('voice') === '1';
+  const ICON = (id) => `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/${id}.png`;
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- Звук ----------
+  // sounds/keys.wav — 12 щелчков клавиш подряд по 80 мс, играет случайный щелчок
+  const SLOT = 0.08, CLIPS = 12;
+  let sfxCtx, keysBuf, lastClip = -1;
+  if (soundOn) {
+    sfxCtx = new AudioContext();
+    fetch('/sounds/keys.wav').then((r) => r.arrayBuffer()).then((b) => sfxCtx.decodeAudioData(b))
+      .then((buf) => { keysBuf = buf; }).catch(() => {});
+  }
+  function keyClick({ vol = 0.22, tone = 1, delay = 0 } = {}) {
+    if (!soundOn || !keysBuf) return;
+    try {
+      let i;
+      do i = Math.floor(Math.random() * CLIPS); while (i === lastClip); // без повтора подряд
+      lastClip = i;
+      const src = sfxCtx.createBufferSource(), g = sfxCtx.createGain();
+      src.buffer = keysBuf;
+      src.playbackRate.value = tone * (0.96 + Math.random() * 0.08);
+      g.gain.value = vol;
+      src.connect(g).connect(sfxCtx.destination);
+      src.start(sfxCtx.currentTime + delay, i * SLOT, SLOT);
+    } catch (e) {}
+  }
+
+  let toastTimer;
+  function toast(text, color, ms = 1800) {
+    const el = $('toast');
+    el.textContent = text;
+    el.style.color = color;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+  }
+
+  function setStatus(text, bad) {
+    const el = $('status');
+    el.textContent = text || '';
+    el.classList.toggle('on', !!text);
+    el.classList.toggle('bad', !!bad);
+  }
+
+  // ---------- Распознавание речи (Vosk, офлайн) ----------
+  // Слушает одна русская модель; английские названия записаны так, как она их слышит
+  const MODEL = '/model-ru.tar.gz';
+  // Сколько миллисекунд решение должно продержаться без изменений, чтобы его засчитать.
+  // 0 — кастуем сразу, как только услышанное совпало с фразой из таблицы, не дожидаясь конца
+  // записи. По ходу слова модель перебирает гипотезы («cut» → «cataclysm»): если из-за этого
+  // кастуется не та способность, подними значение (раньше было 450).
+  const STABLE_MS = 0;
+  // Тишина такой длины заканчивает высказывание (нужно при постоянном прослушивании)
+  const IDLE_MS = 1200;
+  // После отпускания клавиши ждём итог модели не дольше этого (обычно он приходит раньше)
+  const FLUSH_MS = 400;
+  // Одна и та же фраза повторно в пределах этого времени не отправляется
+  const SAME_PHRASE_MS = 2500;
+
+  let model;
+  let grammar = [];                     // фразы
+  let audioCtx;
+  let rec = null;                       // активный распознаватель
+  let flushing = [];                    // распознаватели, от которых ждём итог после отпускания клавиши
+  let flushTimer = null;
+  let listening = false;
+  // Текст текущего высказывания: завершённые куски + то, что звучит сейчас
+  let done = '';
+  let part = '';
+  let sentCount = {};                   // фраза -> сколько раз отправлена в этом высказывании
+  let lastKey = null, stableSince = 0;
+  let lastTextAt = 0;
+  const sentAt = {};
+  const preroll = [];                   // ~0.25 сек звука до начала прослушивания
+
+  async function voiceStatus(ready, message) {
+    try {
+      await fetch('/voice-status', { method: 'POST', body: JSON.stringify({ ready, message }) });
+    } catch (e) {}
+  }
+
+  // Микрофон из настроек (по названию устройства), иначе — системный по умолчанию
+  async function openMic() {
+    const audio = { echoCancellation: true, noiseSuppression: true, channelCount: 1 };
+    let wanted = '';
+    try {
+      wanted = (await (await fetch('/mic')).json()).microphone || '';
+    } catch (e) {}
+    if (wanted) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const dev = devices.find((d) => d.kind === 'audioinput' && d.label === wanted);
+      if (dev) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: { ...audio, deviceId: { exact: dev.deviceId } } });
+          return { stream, micNote: `Микрофон: ${wanted}` };
+        } catch (e) {}
+      }
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio });
+    const label = stream.getAudioTracks()[0]?.label || 'системный';
+    const note = wanted ? `Микрофон «${wanted}» не найден, использую стандартный: ${label}` : `Микрофон (стандартный): ${label}`;
+    return { stream, micNote: note };
+  }
+
+  async function initVoice() {
+    try {
+      setStatus('🎤 Загрузка модели распознавания...');
+      grammar = await (await fetch('/grammar')).json();
+      // Длинные фразы первыми, чтобы «и эм пи» не разбиралась по частям
+      grammar.sort((a, b) => b.split(' ').length - a.split(' ').length);
+      model = await Vosk.createModel(location.origin + MODEL);
+      const { stream, micNote } = await openMic();
+      audioCtx = new AudioContext();
+      const src = audioCtx.createMediaStreamSource(stream);
+      // Кусок поменьше — звук доходит до распознавания быстрее (~40 мс вместо ~85)
+      const proc = audioCtx.createScriptProcessor(2048, 1, 1);
+      proc.onaudioprocess = (e) => {
+        const data = new Float32Array(e.inputBuffer.getChannelData(0));
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+        $('level').style.width = Math.min(100, Math.sqrt(sum / data.length) * 400) + '%';
+        if (listening) feed(data);
+        else {
+          preroll.push(data);
+          if (preroll.length > 6) preroll.shift();
+        }
+      };
+      src.connect(proc);
+      proc.connect(audioCtx.destination);
+      setStatus('🎤 Голосовой каст готов');
+      setTimeout(() => setStatus(''), 3000);
+      voiceStatus(true, 'модель и микрофон готовы. ' + micNote);
+      if (wantListening) startListening();
+    } catch (e) {
+      setStatus('🎤 Голос не работает: ' + (e.message || e), true);
+      voiceStatus(false, 'ошибка: ' + (e.message || e));
+    }
+  }
+
+  // Буфер передаётся в поток модели, поэтому отдаём копию
+  function feed(data) {
+    if (rec) rec.acceptWaveformFloat(data.slice(), audioCtx.sampleRate);
+  }
+
+  const words = (text) => text.split(/\s+/).filter((w) => w && w !== '[unk]');
+
+  // Фразы из текста по порядку. Посторонние слова пропускаем: нераспознанное слово
+  // не должно задерживать способности, названные после него.
+  function parse(text) {
+    const w = words(text);
+    const list = [];
+    for (let i = 0; i < w.length; ) {
+      const hit = grammar.find((p) => p.split(' ').every((x, j) => w[i + j] === x));
+      if (hit) list.push(hit);
+      i += hit ? hit.split(' ').length : 1;
+    }
+    return list;
+  }
+
+  const fullText = () => (done + ' ' + part).trim();
+
+  // Отправляем фразы, которых в этом высказывании ещё не было. Считаем по количеству, а не
+  // по месту в списке: модель по ходу речи пересматривает текст, и фразы могут сдвигаться.
+  // Новые уходят одним запросом, чтобы сервер получил их строго по порядку.
+  function submit(list) {
+    const batch = [], seen = {};
+    for (const p of list) {
+      seen[p] = (seen[p] || 0) + 1;
+      if (seen[p] <= (sentCount[p] || 0)) continue;
+      sentCount[p] = seen[p];
+      if (Date.now() - (sentAt[p] || 0) < SAME_PHRASE_MS) continue;
+      sentAt[p] = Date.now();
+      batch.push(p);
+    }
+    if (batch.length) fetch('/voice', { method: 'POST', body: JSON.stringify({ texts: batch }) }).catch(() => {});
+  }
+
+  function resetUtterance() {
+    done = '';
+    part = '';
+    sentCount = {};
+    lastKey = null;
+    stableSince = 0;
+  }
+
+  // Высказывание закончилось: отправляем всё, что ещё не отправлено, и начинаем заново
+  function endUtterance() {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    flushing = [];
+    submit(parse(fullText()));
+    resetUtterance();
+  }
+
+  // Вызывается на каждое событие распознавания (около 20 раз в секунду, пока идёт звук)
+  function onRecognition(textChanged) {
+    const now = Date.now();
+    if (textChanged) lastTextAt = now;
+    const list = parse(fullText());
+    const key = list.join('|') || null;
+    if (key !== lastKey) {
+      lastKey = key;
+      stableSince = now;
+    }
+    if (key && now - stableSince >= STABLE_MS) submit(list);
+    // Модель молчит достаточно долго — высказывание закончено
+    if (listening && done && !part && now - lastTextAt >= IDLE_MS) endUtterance();
+  }
+
+  function attach(r) {
+    r.on('partialresult', (m) => {
+      if (rec !== r) return;
+      const text = m.result.partial || '';
+      const changed = text !== part;
+      part = text;
+      const shown = fullText().replace(/\[unk\]/g, '…').trim();
+      $('partial').textContent = shown || 'назови способность…';
+      $('partial').classList.toggle('heard', !!shown);
+      onRecognition(changed);
+    });
+    r.on('result', (m) => {
+      if (rec !== r && !flushing.includes(r)) return;
+      const text = m.result.text || '';
+      done = (done + ' ' + text).trim();
+      part = '';
+      onRecognition(!!text);
+      // Итог после отпускания клавиши пришёл — не ждём таймер
+      if (flushing.includes(r) && flushTimer) endUtterance();
+    });
+  }
+
+  function startListening() {
+    if (!model || !audioCtx || listening) return;
+    // Быстрое повторное нажатие: предыдущее высказывание закрываем сразу
+    if (flushTimer) endUtterance();
+    resetUtterance();
+    rec = new model.KaldiRecognizer(audioCtx.sampleRate, JSON.stringify([...grammar, '[unk]']));
+    attach(rec);
+    for (const buf of preroll) feed(buf);
+    lastTextAt = Date.now();
+    listening = true;
+  }
+
+  // Клавишу отпустили — сразу забираем итог, не дожидаясь паузы в речи
+  function stopListening() {
+    if (!listening) return;
+    listening = false;
+    const old = rec;
+    rec = null;
+    flushing = [old];
+    old.retrieveFinalResult();
+    flushTimer = setTimeout(endUtterance, FLUSH_MS);
+    setTimeout(() => old.remove(), FLUSH_MS + 500);
+  }
+
+
+  // ---------- Отрисовка состояния ----------
+  let wantListening = false;
+  // Хитмаркер из CoD в точке под курсором + его звук
+  let hitBuf;
+  if (soundOn) {
+    fetch('/sounds/hitmarker.mp3').then((r) => r.arrayBuffer()).then((b) => sfxCtx.decodeAudioData(b))
+      .then((buf) => { hitBuf = buf; }).catch(() => {});
+  }
+  function hitSound() {
+    if (!soundOn || !hitBuf) return;
+    try {
+      const src = sfxCtx.createBufferSource(), g = sfxCtx.createGain();
+      src.buffer = hitBuf;
+      g.gain.value = 0.6;
+      src.connect(g).connect(sfxCtx.destination);
+      src.start();
+    } catch (e) {}
+  }
+  function showAim(aim) {
+    const el = $('aim');
+    el.style.left = aim.x * 100 + '%';
+    el.style.top = aim.y * 100 + '%';
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+    hitSound();
+  }
+
+  // Видео снято на зелёном фоне: рисуем кадры на холст и делаем зелёное прозрачным
+  const KEY_W = 960; // ширина обработки; больше — чётче, но тяжелее
+  let killFrame = 0;
+  function playKill() {
+    const v = $('killVideo'), c = $('kill');
+    if (!v.videoWidth) return;
+    c.width = Math.min(KEY_W, v.videoWidth);
+    c.height = Math.round(c.width * v.videoHeight / v.videoWidth);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const draw = () => {
+      ctx.drawImage(v, 0, 0, c.width, c.height);
+      const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const other = Math.max(d[i], d[i + 2]), green = d[i + 1] - other;
+        if (green > 80) d[i + 3] = 0;
+        else if (green > 30) {
+          d[i + 3] = 255 * (80 - green) / 50; // край — полупрозрачный, без зелёной каймы
+          d[i + 1] = other;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      if (!v.ended && !v.paused) killFrame = requestAnimationFrame(draw);
+    };
+    cancelAnimationFrame(killFrame);
+    v.muted = !soundOn;
+    v.currentTime = 0;
+    v.onended = () => c.classList.remove('show');
+    v.play().then(() => {
+      c.classList.add('show');
+      draw();
+    }).catch(() => {});
+  }
+
+  function render({ state: s, event, spell, reason, aim }) {
+    wantListening = s.enabled && s.listening;
+    if (VOICE) {
+      if (wantListening) startListening();
+      else stopListening();
+    }
+    // При постоянном прослушивании индикатор не показываем, чтобы не висел весь матч
+    const micShown = wantListening && !!s.talkKey && s.voiceReady;
+    $('mic').classList.toggle('on', micShown);
+    if (event === 'listen') {
+      $('partial').textContent = 'назови способность…';
+      $('partial').classList.remove('heard');
+      if (micShown) keyClick({ vol: 0.12, tone: 1.2 }); // тихий высокий щелчок — микрофон открыт
+    }
+
+    if (event === 'cast' && spell) {
+      $('castIcon').src = ICON(spell.base || spell.id);
+      $('castName').textContent = spell.name;
+      const el = $('cast');
+      // Над прицелом, выше хитмаркера; у краёв экрана плашка не уезжает за него
+      if (aim) {
+        el.style.left = `clamp(130px, ${aim.x * 100}%, calc(100% - 130px))`;
+        el.style.top = `max(calc(${aim.y * 100}% - 40px), 74px)`;
+      }
+      el.classList.remove('show');
+      void el.offsetWidth;
+      el.classList.add('show');
+      // Хитмаркер — только для способностей, которые летят в точку под курсором
+      if (aim && spell.target && params.get('aim') !== '0') showAim(aim);
+    }
+    if (event === 'sunkill') playKill();
+    if (event === 'refuse') {
+      toast(reason, '#ff9a2e', 2500);
+      keyClick({ vol: 0.2, tone: 0.6 }); // глухой низкий щелчок
+    }
+    if (event === 'blocked') {
+      toast('Только голосом!', '#e0463a', 1200);
+      keyClick({ vol: 0.18, tone: 0.6 });
+    }
+    if (event === 'toggle') {
+      toast(s.enabled ? 'Голосовой каст ВКЛ' : 'Голосовой каст ВЫКЛ', s.enabled ? '#6fbf45' : '#7d8a94');
+      keyClick({ vol: 0.22, tone: s.enabled ? 1.1 : 0.8 });
+    }
+  }
+
+  const es = new EventSource('/events');
+  es.onmessage = (e) => render(JSON.parse(e.data));
+  if (VOICE) initVoice();
+</script>
+</body>
+</html>
