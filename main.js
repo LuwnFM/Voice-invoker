@@ -133,7 +133,8 @@ function configurePhrases(useExpanded) {
   config.phrases = enabledPhrases(allPhrases, exclusions(config.disabledPhrases, allPhrases), EXTRA_PHRASES, useExpanded);
   const isRussian = (phrase) => /[а-яё]/i.test(phrase);
   // Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
-  const custom=validateItemPhrases(config.itemPhrases,modelWords,allPhrases,{strict:false});
+  const reserved=enabledPhrases(allPhrases,exclusions(config.disabledPhrases,allPhrases),EXTRA_PHRASES,true);
+  const custom=validateItemPhrases(config.itemPhrases,modelWords,reserved,{strict:false});
   if(custom.errors.length)log('Пропущенные фразы предметов:',custom.errors.join('; '));
   Object.assign(config.phrases,custom.phrases);
   for (const s of [...SPELLS, ...ITEM_SLOTS]) {
@@ -552,7 +553,9 @@ function saveSettings(body) {
   if (typeof body.experimentalFrames === 'boolean') out.experimentalFrames = body.experimentalFrames;
   if (typeof body.testOnly === 'boolean') out.testOnly = body.testOnly;
   if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v)));
-  if(body.itemPhrases!==undefined)out.itemPhrases=validateItemPhrases(body.itemPhrases,modelWords,allPhrases).phrases;
+  // Check the proposed configuration as a whole; disabled spell aliases can be reused.
+  const reserved=enabledPhrases(allPhrases,exclusions(out.disabledPhrases,allPhrases),EXTRA_PHRASES,true);
+  if(body.itemPhrases!==undefined || out.itemPhrases!==undefined)out.itemPhrases=validateItemPhrases(body.itemPhrases??out.itemPhrases,modelWords,reserved).phrases;
   delete out.itemCastModes;
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n');
   userConfig = out;

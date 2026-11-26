@@ -59,7 +59,7 @@ async function ready(previous=0) {
   // Disabled aliases must disappear from the live grammar after restart.
   const preferences=await (await fetch(base+'/config')).json();
   const disabled={...preferences.disabledPhrases,invoker_emp:preferences.phraseCatalog.invoker_emp};
-  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,itemPhrases:{item_slot_item1:['прыжок'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
+  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,itemPhrases:{item_slot_item1:['прыжок','эмп'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
   assert.equal(saved.status,200);
   const r=await fetch(base+'/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   assert.equal(r.status,204);
@@ -68,8 +68,11 @@ async function ready(previous=0) {
   await waitFor('settings reopen after restart',()=>fs.existsSync(path.join(dir,'settings-'+second)));
   assert.ok(!fs.readFileSync(path.join(root,'log.txt'),'utf8').includes('Скачиваю модель Invoker V2'));
   const grammar=await (await fetch(base+'/grammar')).json();
-  assert.ok(preferences.phraseCatalog.invoker_emp.every(p=>!grammar.includes(p)));
+  assert.ok(preferences.phraseCatalog.invoker_emp.filter(p=>p!=='эмп').every(p=>!grammar.includes(p)));
+  assert.ok(grammar.includes('эмп'),'Disabled EMP alias reused for item');
   for(const p of ['прыжок','щит','телепорт'])assert.ok(grammar.includes(p),'Missing custom phrase '+p);
+  const conflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:{...disabled,invoker_emp:[]}})});
+  assert.equal(conflict.status,500,'Re-enabling conflicting alias must be rejected');
   const diag=await (await fetch(base+'/diagnostics')).json();assert.equal(diag.testOnly,true);
   const testResult=await fetch(base+'/voice',{method:'POST',body:JSON.stringify({texts:['торнадо']})});assert.equal(testResult.status,204);
   const checked=await (await fetch(base+'/diagnostics')).json();assert.deepEqual(checked.lastTest.matched,['торнадо']);

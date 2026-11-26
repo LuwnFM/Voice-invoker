@@ -125,7 +125,7 @@
 <p class="hint">Выбирай только нужные фразы. Снятая галочка исключает фразу из грамматики после перезапуска. Включение всех восстанавливает исходный список. Распознавание похожих слов всё равно может ошибаться.</p>
 <div id="phrases"></div>
 <h2>Фразы для слотов предметов</h2>
-<p class="hint">Введи любое слово или фразу из словаря модели, по одной на строку. Пустой список отключает голосовой слот. Команда применяет предмет, который находится в этом слоте сейчас. Без свежего GSI предметы не применяются.</p>
+<p class="hint">Введи любое слово или фразу из словаря модели, по одной на строку. Пустой список отключает голосовой слот. Фразы отключённых способностей можно использовать здесь; одинаковые активные команды не допускаются. Команда применяет предмет, который находится в этом слоте сейчас. Без свежего GSI предметы не применяются.</p>
 <div class="actions"><input id="wordSearch" class="control" placeholder="Поиск слова в словаре"><button id="wordFind">Найти слова</button></div><p id="wordResults" class="hint" style="user-select:text"></p><div id="itemPhrases"></div>
 <h2>Дополнительно</h2>
 <div class="opts"><label><input id="experimentalFrames" type="checkbox"> Экспериментально: frames-per-chunk=3 (выключено по умолчанию)</label>
@@ -306,7 +306,7 @@
     })();
   }
 
-  const spellNames={cold_snap:'Cold Snap',ghost_walk:'Ghost Walk',ice_wall:'Ice Wall',emp:'EMP',tornado:'Tornado',alacrity:'Alacrity',sun_strike:'Sun Strike',forge_spirit:'Forge Spirit',chaos_meteor:'Chaos Meteor',deafening_blast:'Deafening Blast',cataclysm:'Cataclysm',blink:'Blink Dagger'};
+  const spellNames={cold_snap:'Cold Snap',ghost_walk:'Ghost Walk',ice_wall:'Ice Wall',emp:'EMP',tornado:'Tornado',alacrity:'Alacrity',sun_strike:'Sun Strike',forge_spirit:'Forge Spirit',chaos_meteor:'Chaos Meteor',deafening_blast:'Deafening Blast',cataclysm:'Cataclysm'};
   function buildPhrases(c) {
     const host=$('#phrases');host.replaceChildren();
     for(const [id,phrases] of Object.entries(c.phraseCatalog||{})) {

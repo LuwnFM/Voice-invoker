@@ -40,3 +40,12 @@ test('FST word table parser reads symbols and rejects truncated tables',()=>{
  const bytes=Buffer.concat([Buffer.from([0x74,0xfb,0xb2,0x7e]),str('words.txt'),i64(2),i64(2),str('<eps>'),i64(0),str('прыжок'),i64(1)]);
  assert.deepEqual([...wordsFromGraph(bytes)],['прыжок']);assert.throws(()=>wordsFromGraph(bytes.subarray(0,-2)));
 });
+
+test('disabled spell alias may be reused by an item; re-enabling it conflicts',()=>{
+ const {enabledPhrases}=require('../phrase-preferences');
+ const all={invoker_emp:['эмп','импульс']},dict=new Set(['эмп','импульс']);
+ const raw={[ITEM_SLOTS[0].id]:['эмп']};
+ const allowed=enabledPhrases(all,{invoker_emp:['эмп']},{},true);
+ assert.deepEqual(validateItemPhrases(raw,dict,allowed).phrases[ITEM_SLOTS[0].id],['эмп']);
+ assert.throws(()=>validateItemPhrases(raw,dict,enabledPhrases(all,{}, {},true)));
+});
