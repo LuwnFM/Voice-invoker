@@ -21,7 +21,7 @@ function selectExpandedModel(modelDir, enabled, expected = manifest) {
   }
 }
 // Download only once, and never replace a local archive with unverified bytes.
-async function prepareExpandedModel(modelDir, enabled, { expected = manifest, fetchImpl = globalThis.fetch, log = () => {} } = {}) {
+async function prepareExpandedModel(modelDir, enabled, { expected = manifest, fetchImpl = globalThis.fetch, log = (...messages) => {} } = {}) {
   const current = selectExpandedModel(modelDir, enabled, expected);
   if (current.active || enabled === false) return current;
   let tmp;

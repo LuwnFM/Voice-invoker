@@ -7,3 +7,7 @@ log.txt
 build-output/
 launcher.log
 log.previous.txt
+
+.quality-tools/
+.quality-html/
+typecheck-report.txt

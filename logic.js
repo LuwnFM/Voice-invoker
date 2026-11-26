@@ -35,7 +35,7 @@ function vkOf(key) {
   const k = String(key || '').toUpperCase().trim();
   if (!k) return 0;
   const f = /^F(\d{1,2})$/.exec(k);
-  if (f && f[1] >= 1 && f[1] <= 24) return 0x70 + Number(f[1]) - 1;
+  if (f && Number(f[1]) >= 1 && Number(f[1]) <= 24) return 0x70 + Number(f[1]) - 1;
   const n = /^NUM(\d)$/.exec(k);
   if (n) return 0x60 + Number(n[1]);
   if (/^[A-Z0-9]$/.test(k)) return k.charCodeAt(0);

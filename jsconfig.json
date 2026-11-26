@@ -10,14 +10,18 @@
     "strict": false,
     "lib": [
       "ES2022",
-      "DOM"
-    ]
+      "DOM",
+      "DOM.Iterable",
+      "DOM.AsyncIterable"
+    ],
+    "resolveJsonModule": true
   },
   "include": [
     "*.js",
     "scripts/*.js",
     "test/*.js",
-    ".quality-html/*.js"
+    ".quality-html/*.js",
+    "types/*.d.ts"
   ],
   "exclude": [
     "node_modules",

@@ -7,8 +7,7 @@ const { Worker } = require('worker_threads');
 if (!app.requestSingleInstanceLock()) {
   console.log('Voice Invoker уже запущен. Открываю настройки существующего экземпляра.');
   app.exit(0);
-  return;
-}
+} else {
 let settingsRequested = process.env.VI_REOPEN_SETTINGS === '1' || process.argv.includes('--vi-reopen-settings');
 let serverReady = false;
 let tray = null;
@@ -34,6 +33,7 @@ const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT, WM_APP_TOGGLE } = require('./messages');
 
+/** @type {{port:number,authToken:string,keys:Record<string,string>,voiceChatKey:string,blockKeys:string[],listen:string,castMode:string,timingProfile:string,keyDelayMs:number,castDelayMs:number,slotWaitMs:number,clickDelayMs:number,altDelayMs:number,chainGapMs:number,microphone:string,windowTitle:string,phrases:Record<string,string[]>,acceptInjected:boolean,debugSteps:boolean,experimentalFrames?:boolean,testOnly?:boolean,disabledPhrases?:Record<string,string[]>,customSpellPhrases?:Record<string,string[]>,itemPhrases?:Record<string,string[]>,expandedVocabulary?:boolean,slotCastModes?:Record<string,string>}} */
 const config = {
   port: 3055,
   // Должен совпадать с "token" в gamestate_integration_voice_invoke.cfg
@@ -104,6 +104,7 @@ const EXTRA_PHRASES = require('./extra-phrases.json');
 const { catalog, exclusions, mergeCatalog } = require('./phrase-preferences');
 const { experimentalModel } = require('./experimental-model');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
+/** User configuration is extensible JSON; accepted settings are validated before saving. @type {Record<string, any>} */
 let userConfig = {};
 try {
   userConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -138,7 +139,7 @@ function configurePhrases(useExpanded) {
   if(commands.errors.length)log('Пропущенные пользовательские фразы:',commands.errors.join('; '));
   for (const s of [...SPELLS, ...ITEM_SLOTS]) {
     for (const p of config.phrases[s.id] || []) {
-      if (isRussian(p) || s.itemSlot || commands.customSpellPhrases[s.id]?.includes(p)) phraseToSpell[p.toLowerCase()] = s.id;
+      if (isRussian(p) || 'itemSlot' in s || commands.customSpellPhrases[s.id]?.includes(p)) phraseToSpell[p.toLowerCase()] = s.id;
       else skipped.push(p);
     }
   }
@@ -285,7 +286,7 @@ function dispatchCast(spell, action, profile) {
   castRequestId = castRequestId % MAX_CAST_ID + 1;
   const id = castRequestId;
   if (!toHook(WM_APP_CAST, (spell.itemSlot ? SPELLS.length + spell.itemSlot : SPELLS.indexOf(spell) + 1), encodeCast(action, profile, id))) return false;
-  activeCast = { id, spell, action, profile, timedOut: false };
+  activeCast = { id, spell, action, profile, timedOut: false, watchdog: null };
   const timing = getTiming(config, profile);
   // Fail closed if the worker stops responding; do not send another series until it replies.
   const limit = 5000 + 3 * timing.keyDelayMs + timing.castDelayMs + timing.clickDelayMs + 2 * timing.altDelayMs;
@@ -845,7 +846,7 @@ async function createTray() {
 function createWindow() {
   // Разрешаем доступ к микрофону для нашей страницы
   const ownOrigin=url=>{try{return new URL(url).origin==='http://localhost:'+config.port;}catch{return false;}};
-  session.defaultSession.setPermissionRequestHandler((wc,permission,cb,details)=>cb(permission==='media'&&ownOrigin(wc?.getURL())&&ownOrigin(details.requestingUrl||wc?.getURL())&&(!details.mediaTypes||details.mediaTypes.every(t=>t==='audio'))));
+  session.defaultSession.setPermissionRequestHandler((wc,permission,cb,details)=>cb(permission==='media'&&ownOrigin(wc?.getURL())&&ownOrigin(details.requestingUrl||wc?.getURL())&&(!('mediaTypes' in details)||!details.mediaTypes||details.mediaTypes.every(t=>t==='audio'))));
   session.defaultSession.setPermissionCheckHandler((wc,permission,origin,details)=>permission==='media'&&ownOrigin(origin)&&(!details.mediaType||details.mediaType==='audio'));
 
 
@@ -909,7 +910,7 @@ app.whenReady().then(async () => {
   if (shutdown) return;
   if (skipped.length) log(`Фразы не по-русски пропущены (слушает только русская модель): ${skipped.join(', ')}`);
   server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
+    if ('code' in e && e.code === 'EADDRINUSE') {
       log(`Порт ${config.port} уже занят (плагин уже запущен или порт занят другой программой).`);
       log('Проверь владельца порта: Get-NetTCPConnection -LocalPort ' + config.port + ' -State Listen');
       dialog.showErrorBox('Voice Invoker: порт занят', 'Порт ' + config.port + ' уже используется. Закрой предыдущий Voice Invoker или проверь владельца порта. Порт автоматически не меняется.');
@@ -933,3 +934,4 @@ app.whenReady().then(async () => {
   });
 });
 app.on('window-all-closed', () => requestShutdown(false));
+}

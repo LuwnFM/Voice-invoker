@@ -220,7 +220,7 @@
 
   function render() {
     const bad = conflicts();
-    for (const b of document.querySelectorAll('button.key')) {
+    for (const b of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('button.key'))) {
       if (waiting && waiting.btn === b) continue;
       const key = getKey(b.dataset.id);
       b.textContent = PRETTY[key] || key || '—';
@@ -348,13 +348,14 @@
     }
   }
   function selectedExclusions(){
-    const out={};for(const b of document.querySelectorAll('#phrases input[data-spell]')){out[b.dataset.spell]??=[];if(!b.checked)out[b.dataset.spell].push(b.dataset.phrase);}return out;
+    const out={};for(const b of /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#phrases input[data-spell]'))){out[b.dataset.spell]??=[];if(!b.checked)out[b.dataset.spell].push(b.dataset.phrase);}return out;
   }
   let report=null;
   async function refreshDiagnostics(){
     try{
       const r=await fetch('/diagnostics',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);report=await r.json();
       const d=report,host=$('#diagnostics');host.replaceChildren();
+      /** @type {[string,string,boolean][]} */
       const rows=[['Версия',d.version,true],['Dota 2',d.dotaFound?'Найдена':'Путь не подтверждён',d.dotaFound],['Процесс игры',d.running===null?'Не удалось проверить':d.running?'Запущена':'Не запущена',d.running===true],['Параметр запуска',d.launchFlag===null?'Не проверен':d.launchFlag?'-gamestateintegration':'Отсутствует',d.launchFlag===true],['Инвентарь GSI',d.itemsConfigured?'Настроен':'Требуется запуск start.bat',d.itemsConfigured],['GSI-файл',d.gsiInstalled?(d.gsiConfigMatches?'Установлен':'Не совпадает с настройками'):'Не найден',d.gsiInstalled&&d.gsiConfigMatches],['GSI',d.gsiAgeMs===null?'Нет данных':d.gsiAgeMs<5000?'Получены':'Данные устарели',d.gsiAgeMs!==null&&d.gsiAgeMs<5000],['Модель V2',d.modelVerified?'SHA-256 OK':'Не подтверждена',d.modelVerified],['Экспериментальный режим',d.experimentalActive?'Включён':'Выключен',true],['Микрофон и модель',d.voiceReady?'Готовы':'Не готовы',d.voiceReady],['Хук',d.hookReady?'Активен':'Не готов',d.hookReady],['Режим',d.testOnly?'Тест без нажатий':d.enabled?'Каст включён':'Каст выключен',true],['Порт',String(d.port),d.serverReady],['Профиль',d.profile,true],['Активные фразы',String(d.activePhrases),true]];
       if(d.testOnly){rows.push(['Текст распознавания',d.lastTest?.transcript||'Произнеси фразу',true]);rows.push(['Совпавшие команды',d.lastTest?.matched?.join(' / ')||'Нет совпадений',true]);}
       for(const [label,value,ok] of rows){const row=document.createElement('div'),v=document.createElement('span');row.className='diag-row';v.className=ok?'oktext':'warntext';v.textContent=value;row.append(document.createTextNode(label),v);host.append(row);}
@@ -363,7 +364,7 @@
   $('#refreshReport').onclick=refreshDiagnostics;
   $('#repairGsi').onclick=async()=>{const b=$('#repairGsi');b.disabled=true;try{const d=await (await fetch('/repair-gsi',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();status(d.message||d.error,d.ok?'ok':'bad');await refreshDiagnostics();}catch(e){status(e.message,'bad');}finally{b.disabled=false;}};
   $('#openLogs').onclick=()=>fetch('/open-logs',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-  $('#copyReport').onclick=async()=>{try{if(!report)await refreshDiagnostics();if(!report)throw Error('Нет отчёта');const {lastTest,...safe}=report;await navigator.clipboard.writeText(JSON.stringify(safe,null,2));status('Отчёт скопирован','ok');}catch(e){status(e.message,'bad');}};
+  $('#copyReport').onclick=async()=>{try{if(!report)await refreshDiagnostics();if(!report)throw Error('Нет отчёта');const {lastTest:_lastTest,...safe}=report;await navigator.clipboard.writeText(JSON.stringify(safe,null,2));status('Отчёт скопирован','ok');}catch(e){status(e.message,'bad');}};
   refreshDiagnostics();setInterval(refreshDiagnostics,2000);
   function buildItemPhrases(c){
     const host=$('#itemPhrases');host.replaceChildren();
@@ -387,16 +388,16 @@
     return {
       keys: state.keys,
       disabledPhrases: selectedExclusions(),
-      customSpellPhrases: Object.fromEntries(Object.entries(spellNames).map(([suffix])=>{const id='invoker_'+suffix;return [id,[...document.querySelectorAll('#phrases input[data-custom="1"][data-spell="'+id+'"]')].map(b=>b.dataset.phrase)];})),
+      customSpellPhrases: Object.fromEntries(Object.entries(spellNames).map(([suffix])=>{const id='invoker_'+suffix;return [id,[.../** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#phrases input[data-custom="1"][data-spell="'+id+'"]'))].map(b=>b.dataset.phrase)];})),
       experimentalFrames: $('#experimentalFrames').checked,
       testOnly: $('#testOnly').checked,
-      slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value,...Object.fromEntries([...document.querySelectorAll('[data-item-mode]')].map(e=>[e.dataset.itemMode,e.value]))},
-      itemPhrases: Object.fromEntries([...document.querySelectorAll('[data-item-phrase]')].map(e=>[e.dataset.itemPhrase,e.value.split(/\r?\n/).filter(p=>p.trim())])),
+      slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value,...Object.fromEntries([.../** @type {NodeListOf<HTMLSelectElement>} */ (document.querySelectorAll('[data-item-mode]'))].map(e=>[e.dataset.itemMode,e.value]))},
+      itemPhrases: Object.fromEntries([.../** @type {NodeListOf<HTMLTextAreaElement>} */ (document.querySelectorAll('[data-item-phrase]'))].map(e=>[e.dataset.itemPhrase,e.value.split(/\r?\n/).filter(p=>p.trim())])),
       voiceChatKey: state.voice,
-      castMode: document.querySelector('input[name=castMode]:checked')?.value,
-      listen: document.querySelector('input[name=listen]:checked')?.value,
+      castMode: (/** @type {HTMLInputElement} */ (document.querySelector('input[name=castMode]:checked')))?.value,
+      listen: (/** @type {HTMLInputElement} */ (document.querySelector('input[name=listen]:checked')))?.value,
       microphone: $('#mic').value,
-      blockKeys: [...document.querySelectorAll('input[name=block]:checked')].map((i) => i.value),
+      blockKeys: [.../** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('input[name=block]:checked'))].map((i) => i.value),
     };
   }
 
@@ -427,7 +428,7 @@
     state.slotModes=c.slotCastModes||{};buildItemPhrases(c);
     state.voice = String(c.voiceChatKey || '').toUpperCase();
     for (const k of Object.keys(state.keys)) state.keys[k] = String(state.keys[k]).toUpperCase();
-    const pick = (name, v) => { const i = document.querySelector(`input[name=${name}][value="${v}"]`); if (i) i.checked = true; };
+    const pick = (name, v) => { const i = /** @type {HTMLInputElement} */ (document.querySelector(`input[name=${name}][value="${v}"]`)); if (i) i.checked = true; };
     pick('castMode', c.castMode);
     pick('listen', c.listen);
     for (const n of c.blockKeys) pick('block', n);

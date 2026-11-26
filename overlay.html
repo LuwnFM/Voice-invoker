@@ -197,6 +197,7 @@
 
   let model;
   let grammar = [];                     // фразы
+  /** @type {(text:string)=>string[]} */
   let parse = () => [];
   let recognitionGate = createRecognitionGate(text => parse(text));
   let lastMeterAt = 0;
@@ -426,7 +427,7 @@
     }
 
     if (event === 'cast' && spell) {
-      $('castIcon').src = ICON(spell.base || spell.id);
+      /** @type {HTMLImageElement} */ ($('castIcon')).src = ICON(spell.base || spell.id);
       $('castName').textContent = spell.name;
       const el = $('cast');
       // Над прицелом; у краёв экрана плашка не уезжает за него

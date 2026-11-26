@@ -2,8 +2,10 @@ const {ITEM_SLOTS}=require('./items');
 const {PREPARE_PREFIXES}=require('./phrase-parser');
 const normalize=p=>String(p).trim().toLowerCase().replace(/\s+/g,' ');
 const cues=new Set([...PREPARE_PREFIXES.map(p=>p.split(' ')[0]),'фолиант']);
+/** @param {Record<string,string[]>|undefined} raw @param {Set<string>|null} words @param {Record<string,string[]>} spellCatalog @param {{strict?:boolean,targets?:readonly {id:string,name:string}[],excluded?:Record<string,string[]>,ownCatalog?:Record<string,string[]>}} [options] @returns {{phrases:Record<string,string[]>,errors:string[]}} */
 function validatePhrases(raw,words,spellCatalog,{strict=true,targets=ITEM_SLOTS,excluded={},ownCatalog={}}={}){
- const result={},used=new Set(Object.values(spellCatalog).flat().map(normalize)),errors=[];
+ /** @type {Record<string,string[]>} */
+ const result={};const used=new Set(Object.values(spellCatalog).flat().map(normalize)),errors=[];
  for(const slot of targets){
    result[slot.id]=[];
    const list=raw?.[slot.id];
