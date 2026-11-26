@@ -178,45 +178,17 @@ function handleGsi(data) {
     if (a.name.startsWith('invoker_empty') || SPELLS.some((s) => s.id === a.name)) slots.push(a.name);
   }
   if (!gsi) log('Данные от Dota получены (GSI работает)');
-  detectSunStrikeKill(data, abilities);
   gsi = {
     at: Date.now(),
     hero: data.hero?.name || null,
     alive: data.hero?.alive !== false,
     scepter: data.hero?.aghanims_scepter, // undefined, если игра не сообщает
-    kills: data.player?.kills,
     abilities,
     slots,
   };
   checkSlot();
   // Очередь могла ждать свежих данных об Invoke
   if (queue.length) pump();
-}
-
-// ---------- Убийство Sun Strike ----------
-// Игра не сообщает, чем убит герой. Считаем убийство «с санстрайка», если счётчик убийств
-// вырос через 1.4–4 сек после его применения: удар падает через 1.7 сек (Cataclysm — позже).
-const SUN_KILL_MIN_MS = 1400;
-const SUN_KILL_MAX_MS = 4000;
-let sunStrikeAt = 0;
-let killsWarned = false;
-
-function detectSunStrikeKill(data, abilities) {
-  if (!gsi) return;
-  const now = Date.now();
-  // Sun Strike ушёл на перезарядку — применён (в том числе руками, без голоса)
-  const was = gsi.abilities.invoker_sun_strike, is = abilities.invoker_sun_strike;
-  if (was && is && was.cooldown === 0 && is.cooldown > 0) sunStrikeAt = now;
-  const kills = data.player?.kills;
-  if (kills === undefined && data.hero?.name && !killsWarned) {
-    killsWarned = true;
-    log('Dota не присылает счётчик убийств — анимация за Sun Strike не сработает. Скопируй файл .cfg в папку Dota заново и перезапусти игру.');
-  }
-  if (!(kills > gsi.kills)) return;
-  const since = now - sunStrikeAt;
-  if (since < SUN_KILL_MIN_MS || since > SUN_KILL_MAX_MS) return;
-  log(`Убийство через ${since} мс после Sun Strike — показываю анимацию`);
-  broadcast({ ...last, event: 'sunkill' });
 }
 
 // Пока Dota не прислала данные после нашего каста, состояние слотов считаем сами:
@@ -365,7 +337,6 @@ function press(spell, phrase, action, how) {
   log(`"${phrase}" -> ${spell.name} (${how})${queue.length ? `, дальше в очереди: ${queue.length}` : ''}`);
   toHook(WM_APP_CAST, SPELLS.indexOf(spell) + 1, action);
   busyUntil = Date.now() + sequenceMs(spell, action) + config.chainGapMs;
-  if ((spell.base || spell.id) === 'invoker_sun_strike') sunStrikeAt = Date.now();
   if (gsi) {
     const pr = prediction() || { slots: [...gsi.slots], used: new Set(), invoked: false };
     const id = spell.base || spell.id;
@@ -377,7 +348,7 @@ function press(spell, phrase, action, how) {
     pr.after = busyUntil;
     predicted = pr;
   }
-  // Положение курсора в долях экрана — для хитмаркера в оверлее (подходит и для OBS)
+  // Положение курсора для плашки способности (подходит и для OBS)
   const { bounds } = screen.getPrimaryDisplay();
   const pt = screen.getCursorScreenPoint();
   const aim = { x: (pt.x - bounds.x) / bounds.width, y: (pt.y - bounds.y) / bounds.height };
@@ -483,14 +454,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/' || p === '/overlay.html') return sendFile(res, path.join(__dirname, 'overlay.html'), 'text/html; charset=utf-8');
   if (p === '/sounds/keys.wav') return sendFile(res, path.join(__dirname, 'sounds', 'keys.wav'), 'audio/wav');
-  if (p === '/sounds/hitmarker.mp3') return sendFile(res, path.join(__dirname, 'sounds', 'hitmarker.mp3'), 'audio/mpeg');
   if (p === '/vosk.js') return sendFile(res, require.resolve('vosk-browser/dist/vosk.js'), 'text/javascript');
-  if (p === '/media/sunstrike-kill.mp4') return sendFile(res, path.join(__dirname, 'media', 'sunstrike-kill.mp4'), 'video/mp4');
-  // Проверка анимации без игры: открой http://localhost:порт/test-kill
-  if (p === '/test-kill') {
-    broadcast({ ...last, event: 'sunkill' });
-    return done();
-  }
+  if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
+  if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
   if (p === '/settings') return sendFile(res, path.join(__dirname, 'settings.html'), 'text/html; charset=utf-8');
   if (p === '/config' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
