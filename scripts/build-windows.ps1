@@ -53,5 +53,6 @@ if ($Installer) {
     $exe = Join-Path $out "VoiceInvoker-Setup-$version.exe"
     & $makensis "/DVERSION=$version" "/DSTAGE=$stage" "/DOUTFILE=$exe" "/DREMOVEFILES=$remove" (Join-Path $root 'installer.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
+    & (Join-Path $PSScriptRoot 'installer-smoke.ps1') -Installer $exe
 }
 Write-Host "Windows packages: $out"

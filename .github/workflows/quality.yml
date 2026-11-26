@@ -1,0 +1,47 @@
+name: JavaScript quality audit
+on:
+  push:
+    branches: [main, rc7-diagnostics-controls]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22','26']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Install pinned audit tools in an isolated folder
+        run: npm install --prefix .quality-tools --no-package-lock --ignore-scripts eslint@9.39.1 typescript@5.9.3
+      - name: Extract browser scripts
+        run: node scripts/extract-inline.js
+      - name: ESLint correctness checks
+        run: node .quality-tools/node_modules/eslint/bin/eslint.js . .quality-html/*.js --format stylish
+      - name: TypeScript checkJs (full project baseline)
+        shell: bash
+        run: |
+          set +e
+          node .quality-tools/node_modules/typescript/bin/tsc -p jsconfig.json --pretty false > typecheck-report.txt 2>&1
+          code=$?
+          cat typecheck-report.txt
+          echo "TypeScript exit: $code"
+          echo "TypeScript diagnostic count: $(grep -c 'error TS' typecheck-report.txt || true)"
+          if [[ "$code" -ne 0 ]]; then echo "::warning::Legacy JavaScript type diagnostics remain; see artifact."; fi
+      - name: Unit and integration tests with coverage
+        run: node --experimental-test-coverage --test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: typecheck-node-${{ matrix.node }}
+          path: typecheck-report.txt

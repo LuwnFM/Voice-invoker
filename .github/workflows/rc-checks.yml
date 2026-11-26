@@ -46,8 +46,11 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'setup-dota.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count) { $errors | Format-List; throw 'Invalid installer syntax' }
+          Get-ChildItem -Path . -File -Filter *.ps1; Get-ChildItem -Path scripts -File -Filter *.ps1 | Out-Null
+          foreach ($script in @(Get-ChildItem -Path . -File -Filter *.ps1) + @(Get-ChildItem -Path scripts -File -Filter *.ps1)) {
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | Format-List; throw "Invalid syntax: $script" }
+          }
       - name: Check installed dependencies
         run: npm ls --depth=0
 

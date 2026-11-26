@@ -263,7 +263,8 @@
 
   // ---------- Выбор микрофона и индикатор уровня ----------
   // Устройство храним по названию: id устройств в браузере могут меняться
-  let micStream = null, micCtx = null;
+  let micStream = null, micCtx = null, micSource = null, micGeneration = 0;
+  window.addEventListener('pagehide',()=>{micGeneration++;micStream?.getTracks().forEach(t=>t.stop());micSource?.disconnect();micCtx?.close().catch(()=>{});});
   async function initMic(saved) {
     const sel = $('#mic');
     try {
@@ -276,25 +277,29 @@
     for (const d of devices) sel.add(new Option(d.label, d.label));
     if (saved && !devices.some((d) => d.label === saved)) sel.add(new Option(saved + ' (не подключён)', saved));
     sel.value = saved;
-    sel.onchange = () => { status('Есть несохранённые изменения'); meter(); };
-    meter();
+    sel.onchange = () => { status('Есть несохранённые изменения'); meter().catch(e=>status(e.message,'bad')); };
+    await meter();
   }
 
   async function meter() {
+    const generation=++micGeneration;
     if (micStream) micStream.getTracks().forEach((t) => t.stop());
+    micSource?.disconnect();micSource=null;
     micStream = null;
     const label = $('#mic').value;
     const dev = label && (await navigator.mediaDevices.enumerateDevices()).find((d) => d.kind === 'audioinput' && d.label === label);
     if (label && !dev) return ($('#level').style.width = '0');
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: dev ? { deviceId: { exact: dev.deviceId } } : true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: dev ? { deviceId: { exact: dev.deviceId } } : true });
+      if(generation!==micGeneration){stream.getTracks().forEach(t=>t.stop());return;}
+      micStream=stream;
     } catch (e) {
       return status('Микрофон недоступен: ' + e.message, 'bad');
     }
     micCtx = micCtx || new AudioContext();
     const an = micCtx.createAnalyser();
     an.fftSize = 1024;
-    micCtx.createMediaStreamSource(micStream).connect(an);
+    micSource=micCtx.createMediaStreamSource(micStream);micSource.connect(an);
     const buf = new Float32Array(an.fftSize);
     const own = micStream;
     (function tick() {
@@ -431,7 +436,7 @@
     $('#testOnly').checked=c.testOnly;
     $('#slot1Mode').value=c.slotCastModes?.slot1||'';
     $('#slot2Mode').value=c.slotCastModes?.slot2||'';
-    initMic(c.microphone || '');
+    initMic(c.microphone || '').catch(e=>status('Микрофон: '+e.message,'bad'));
     build();
     render();
     if(c.firstRun)$('#importBinds').click();

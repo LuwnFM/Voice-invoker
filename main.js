@@ -122,7 +122,7 @@ const MODEL_DIR = path.join(__dirname, 'model');
 const RU_NAME = 'vosk-model-small-ru-0.22';
 const RU_URL = `https://alphacephei.com/vosk/models/${RU_NAME}.zip`;
 let RU_PATH = path.join(MODEL_DIR, RU_NAME + '.tar.gz');
-const phraseToSpell = {};
+const phraseToSpell = Object.create(null);
 const skipped = [];
 const allPhrases = catalog(Object.fromEntries(Object.entries(config.phrases).filter(([id])=>SPELLS.some(s=>s.id===id))), EXTRA_PHRASES);
 let modelWords=null;
@@ -342,7 +342,7 @@ function castByPhrase(command) {
   const id=phraseToSpell[phrase];
   const spell = SPELLS.find(s=>s.id===id) || (id?.startsWith('item_slot_') ? ITEM_SLOTS.find(s=>s.id===id) : null);
   if (!spell) return;
-  if (!last || !last.state.enabled || activeCast?.timedOut) return;
+  if (!last || !last.state.enabled || !last.state.voiceReady || activeCast?.timedOut) return;
   if(queue.length>=32)return;
   // Одну и ту же фразу могут услышать обе модели — второй раз не кастуем
   const dedupId = (prepareOnly ? 'prepare:' : 'cast:') + spell.id;
@@ -356,7 +356,7 @@ function castByPhrase(command) {
 function pump() {
   clearTimeout(pumpTimer);
   pumpTimer = null;
-  if (!last?.state.enabled) { discardWaiting(); return; }
+  if (!last?.state.enabled || !last.state.voiceReady) { discardWaiting(); return; }
   while (queue.length && !awaitingSlot && !activeCast) {
     const now = Date.now();
     if (now < busyUntil) {
@@ -429,7 +429,7 @@ function notifyPrepared(spell, confirmed) {
 }
 
 function checkSlot() {
-  if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled) return;
+  if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled || !last.state.voiceReady) return;
   const { spell, phrase, from, timer, profile, prepareOnly } = awaitingSlot;
   if (gsi.at < from) return;
   if(gsi.hero!=='npc_dota_hero_invoker'||gsi.alive!==true||(!prepareOnly&&spell.needsScepter&&gsi.scepter===false)){
@@ -536,7 +536,7 @@ function saveSettings(body) {
   const keys = {};
   for (const n of KEY_NAMES) if (okKey(body.keys?.[n])) keys[n] = body.keys[n].toUpperCase();
   for (const n of ITEM_KEYS) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
-  out.keys = { ...config.keys, ...keys };
+  out.keys = { ...config.keys, ...userConfig.keys, ...keys };
   if (okKey(body.voiceChatKey)) out.voiceChatKey = body.voiceChatKey.toUpperCase();
   validateKeys(out.keys,out.voiceChatKey||config.voiceChatKey);
   if (['click', 'quickcast'].includes(body.castMode)) out.castMode = body.castMode;
@@ -724,7 +724,8 @@ async function handleRequest(req,res){
   if (req.method === 'POST' && p === '/voice-status') {
     const { ready, message } = await readJson(req);
     if (message) log('Голос:', message);
-    voiceReady = !!ready;
+    voiceReady = ready === true;
+    if(!voiceReady)discardWaiting();
     voiceInfo = {ready:voiceReady,message:String(message||'')};
     toHook(WM_APP_VOICE_READY, voiceReady ? 1 : 0);
     return done();
@@ -757,7 +758,7 @@ function startWorker() {
     if (m.type === 'state') {
       if (shutdown) return;
       last = { state: m.state };
-      if (!m.state.enabled) discardWaiting();
+      if (!m.state.enabled || !m.state.voiceReady) discardWaiting();
       broadcast({ ...last, event: m.event });
       if (m.event === 'profile') log('Режим задержек:', profileLabel(m.state.timingProfile));
       if (m.event === 'blocked') log('Клавиша заблокирована: способности только голосом');

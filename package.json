@@ -7,7 +7,11 @@
   "scripts": {
     "start": "node scripts/launch.js",
     "test": "node --test",
-    "check:runtime": "node scripts/ensure-runtime.js"
+    "check:runtime": "node scripts/ensure-runtime.js",
+    "lint": "node .quality-tools/node_modules/eslint/bin/eslint.js . .quality-html/*.js",
+    "typecheck": "node .quality-tools/node_modules/typescript/bin/tsc -p jsconfig.json",
+    "coverage": "node --experimental-test-coverage --test",
+    "quality:prepare": "node scripts/extract-inline.js"
   },
   "dependencies": {
     "koffi": "^2.9.0",

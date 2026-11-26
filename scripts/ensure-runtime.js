@@ -57,7 +57,9 @@ function repairElectron() {
 function verify() {
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
   delete env.ELECTRON_OVERRIDE_DIST_PATH;
-  run(exe, ['-e', 'require("koffi").load("user32.dll");require.resolve("vosk-browser/dist/vosk.js");console.log("Electron/Koffi/Vosk runtime OK",process.versions.electron)'], { env });
+  const expected=lock.packages['node_modules/electron'].version;
+  if(fs.readFileSync(path.join(electronDir,'path.txt'),'utf8').trim()!=='electron.exe')throw Error('Invalid Electron path.txt');
+  run(exe, ['-e', 'if(process.versions.electron!=='+JSON.stringify(expected)+')throw Error("Wrong Electron version");require("koffi").load("user32.dll");require.resolve("vosk-browser/dist/vosk.js");console.log("Electron/Koffi/Vosk runtime OK",process.versions.electron)'], { env,timeout:30000 });
 }
 function main() {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Windows x64 Node.js required');
@@ -76,7 +78,7 @@ function main() {
   catch {
     console.log('Runtime check failed; reinstalling locked dependencies once...');
     npm(['ci', '--include=dev']);
-    if (!fs.existsSync(exe) || !fs.existsSync(path.join(electronDir, 'path.txt'))) repairElectron();
+    repairElectron();
     verify();
   }
 }

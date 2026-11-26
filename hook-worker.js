@@ -157,7 +157,7 @@ function finishSequence(ok, reason = '') {
 
 function runSequence() {
   while (seq && seqIdx < seq.length) {
-    if (!voice.state.enabled) return finishSequence(false, 'Voice casting disabled');
+    if (!voice.state.enabled || !voice.state.voiceReady) return finishSequence(false, 'Voice casting disabled or microphone unavailable');
     if (!isGameActive()) return finishSequence(false, 'Dota lost focus');
     const step = seq[seqIdx];
     if (step.wait > 0 && !step.waited) {
@@ -186,7 +186,7 @@ function runSequence() {
 
 function startCast(spell, encoded) {
   const command = decodeCast(encoded);
-  if (!spell || !voice.state.enabled || !isGameActive() || seq) {
+  if (!spell || !voice.state.enabled || !voice.state.voiceReady || !isGameActive() || seq) {
     parentPort.postMessage({ type: 'cast-complete', id: command.id, ok: false, reason: 'Cast not accepted', profile: command.profile, elapsedMs: 0 });
     return;
   }
@@ -264,6 +264,7 @@ try {
         if(!voice.state.enabled&&seq)finishSequence(false,'Voice casting disabled');
       } else if (type === WM_APP_VOICE_READY) {
         voice.setVoiceReady(wParam === 1);
+        if(wParam!==1&&seq)finishSequence(false,'Microphone unavailable');
       }
     } catch (e) {
       finishSequence(false, e.message);

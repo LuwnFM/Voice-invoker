@@ -19,7 +19,7 @@ function harness(withGsi = false, realPlan = false) {
   const ctx=vm.createContext({
     SPELLS, ACTION, decodeVoiceCommand, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
     config:{...NORMAL,slotWaitMs:1500,timingProfile:'normal'},
-    last:{state:{enabled:true,timingProfile:'normal'}},
+    last:{state:{enabled:true,voiceReady:true,timingProfile:'normal'}},
     gsi:withGsi?{at:now,hero:'npc_dota_hero_invoker',alive:true,slots:[],abilities:{}}:null,
     gsiWarned:false,
     predicted:null, prediction:()=>ctx.predicted,
@@ -117,3 +117,5 @@ test('after Invoke, changed hero state or disabled ability prevents slot input',
   h.api.checkSlot();assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'refuse');
  }
 });
+
+test('microphone loss drops queued casts',()=>{const h=harness();h.api.castByPhrase('a');h.api.castByPhrase('b');h.ctx.last.state.voiceReady=false;h.ack(h.requests[0]);h.advance(1000);h.api.pump();assert.equal(h.requests.length,1);h.api.castByPhrase('b');assert.equal(h.requests.length,1);});

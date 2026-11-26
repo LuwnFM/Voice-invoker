@@ -65,8 +65,9 @@ if ($Uninstall) {
     Write-Host 'GSI installation removed. Restart Dota if it is running.'
     exit 0
 }
-$steam = Find-Steam
-try { $dota = Find-Dota $steam } catch {
+$steam = $null
+try { $steam = Find-Steam } catch { if ($Launch) { throw } }
+try { if (-not $steam) { throw 'Steam not found.' }; $dota = Find-Dota $steam } catch {
     $manual = $null
     if (Test-Path -LiteralPath $statePath) {
         try {
