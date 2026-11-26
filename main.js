@@ -24,6 +24,7 @@ const koffi = require('koffi');
 const SPELLS = require('./spells');
 const { ITEM_COMMAND, ITEM_SLOTS, planBlink } = require('./items');
 const { importBindings } = require('./dota-bindings');
+const { processStatus } = require('./diagnostics');
 const { ACTION, vkOf } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
@@ -521,6 +522,7 @@ function settingsData() {
     phraseCatalog: allPhrases,
     disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, allPhrases),
     itemCastModes: userConfig.itemCastModes||{},
+    firstRun: !userConfig.keys,
     experimentalFrames: userConfig.experimentalFrames === true,
     testOnly: userConfig.testOnly === true,
     slotCastModes: userConfig.slotCastModes || {},
@@ -550,17 +552,21 @@ function saveSettings(body) {
   log('Настройки сохранены в config.json');
 }
 
-function diagnostics() {
-  let installed = false, cfgMatches = false;
+async function diagnostics() {
+  let installed = false, cfgMatches = false, itemsConfigured = false, dotaFound = false;
+  const process = await processStatus();
   try {
     const record = JSON.parse(fs.readFileSync(path.join(__dirname,'.dota-install.json'),'utf8').replace(/^\uFEFF/,''));
     installed = fs.existsSync(record.target);
+    const game=path.resolve(path.dirname(record.target),'..','..','..');
+    dotaFound=fs.existsSync(path.join(game,'bin','win64','dota2.exe'));
     if (installed) {
       const raw=fs.readFileSync(record.target,'utf8');
       cfgMatches=raw.includes('http://127.0.0.1:'+config.port+'/gsi')&&raw.includes('"'+config.authToken+'"');
+      itemsConfigured=/"items"\s*"1"/.test(raw);
     }
   } catch {}
-  return {version:require('./package.json').version, gsiInstalled:installed, gsiConfigMatches:cfgMatches, gsiAgeMs:gsi?Date.now()-gsi.at:null, hero:gsi?.hero||null, modelVerified:modelInfo.active, experimentalActive:!!experimental, voiceReady:voiceInfo.ready, hookReady:!!hookThreadId, enabled:!!last?.state.enabled, profile:last?.state.timingProfile||config.timingProfile, port:config.port, serverReady, testOnly, lastTest, activePhrases:Object.keys(phraseToSpell).length};
+  return {version:require('./package.json').version, dotaFound, ...process, itemsConfigured, gsiInstalled:installed, gsiConfigMatches:cfgMatches, gsiAgeMs:gsi?Date.now()-gsi.at:null, hero:gsi?.hero||null, modelVerified:modelInfo.active, experimentalActive:!!experimental, voiceReady:voiceInfo.ready, hookReady:!!hookThreadId, enabled:!!last?.state.enabled, profile:last?.state.timingProfile||config.timingProfile, port:config.port, serverReady, testOnly, lastTest, activePhrases:Object.keys(phraseToSpell).length};
 }
 let settingsWin = null;
 function openSettings() {
@@ -602,13 +608,16 @@ const server = http.createServer(async (req, res) => {
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
   if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
   if (p === '/settings') return sendFile(res, path.join(__dirname, 'settings.html'), 'text/html; charset=utf-8');
+  if (p === '/open-logs' && req.method === 'POST' && String(req.headers['content-type']||'').startsWith('application/json')) {
+    await shell.openPath(__dirname);return done();
+  }
   if (p === '/import-bindings' && req.method === 'POST' && String(req.headers['content-type']||'').startsWith('application/json')) {
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
     try {return res.end(JSON.stringify({ok:true,...importBindings()}));} catch(e){return res.end(JSON.stringify({ok:false,error:String(e.message).slice(0,180)}));}
   }
   if (p === '/diagnostics' && req.method === 'GET') {
     res.writeHead(200, {'Content-Type':'application/json','Cache-Control':'no-store'});
-    return res.end(JSON.stringify(diagnostics()));
+    return res.end(JSON.stringify(await diagnostics()));
   }
   if (p === '/config' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -762,6 +771,7 @@ async function createTray() {
       { label: 'Настройки', click: openSettings },
       { label: 'Перезапустить', click: () => requestShutdown(true) },
       { label: 'Открыть журнал', click: () => shell.openPath(LOG_FILE).then(error => { if (error) log(error); }) },
+      { label: 'Папка журналов', click: () => shell.openPath(__dirname) },
       { type: 'separator' },
       { label: 'Выйти из Voice Invoker', click: () => requestShutdown(false) },
     ]));

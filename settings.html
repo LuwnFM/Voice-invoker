@@ -82,7 +82,7 @@
 
 <h2>Проверка</h2>
 <div class="panel" id="diagnostics">Загрузка...</div>
-<div class="actions"><button id="copyReport">Скопировать отчёт</button><button id="refreshReport">Обновить</button></div>
+<div class="actions"><button id="copyReport">Скопировать отчёт</button><button id="refreshReport">Обновить</button><button id="openLogs">Папка журналов</button></div>
 <p class="hint">Отчёт не включает пути, Steam ID, токен GSI или записи микрофона.</p>
 <h2>Клавиши в Dota</h2>
 <p class="hint">Должны совпадать с твоими настройками в игре.</p>
@@ -99,6 +99,7 @@
 </div>
 
 <div class="actions"><label>Слот 1 <select class="control" id="slot1Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label><label>Слот 2 <select class="control" id="slot2Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label></div>
+<details><summary>Индивидуальный каст Blink Dagger</summary><div id="itemModes" class="actions"></div></details>
 <h2>Скорость нажатий</h2>
 <p class="hint">Ctrl+Shift+F10 — включить обычный режим; Ctrl+Shift+F11 — включить ускоренный; Ctrl+Shift+F12 — турбо (экспериментальные). Уже начатая команда завершится с прежним профилем. Ctrl+Shift+F7 — вкл/выкл.</p>
 
@@ -327,18 +328,26 @@
     try{
       const r=await fetch('/diagnostics',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);report=await r.json();
       const d=report,host=$('#diagnostics');host.replaceChildren();
-      const rows=[['Версия',d.version,true],['GSI-файл',d.gsiInstalled?(d.gsiConfigMatches?'Установлен':'Не совпадает с настройками'):'Не найден',d.gsiInstalled&&d.gsiConfigMatches],['GSI',d.gsiAgeMs===null?'Нет данных':d.gsiAgeMs<5000?'Получены':'Данные устарели',d.gsiAgeMs!==null&&d.gsiAgeMs<5000],['Модель V2',d.modelVerified?'SHA-256 OK':'Не подтверждена',d.modelVerified],['Экспериментальный режим',d.experimentalActive?'Включён':'Выключен',true],['Микрофон и модель',d.voiceReady?'Готовы':'Не готовы',d.voiceReady],['Хук',d.hookReady?'Активен':'Не готов',d.hookReady],['Режим',d.testOnly?'Тест без нажатий':d.enabled?'Каст включён':'Каст выключен',true],['Порт',String(d.port),d.serverReady],['Профиль',d.profile,true],['Активные фразы',String(d.activePhrases),true]];
+      const rows=[['Версия',d.version,true],['Dota 2',d.dotaFound?'Найдена':'Путь не подтверждён',d.dotaFound],['Процесс игры',d.running===null?'Не удалось проверить':d.running?'Запущена':'Не запущена',d.running===true],['Параметр запуска',d.launchFlag===null?'Не проверен':d.launchFlag?'-gamestateintegration':'Отсутствует',d.launchFlag===true],['Инвентарь GSI',d.itemsConfigured?'Настроен':'Требуется запуск start.bat',d.itemsConfigured],['GSI-файл',d.gsiInstalled?(d.gsiConfigMatches?'Установлен':'Не совпадает с настройками'):'Не найден',d.gsiInstalled&&d.gsiConfigMatches],['GSI',d.gsiAgeMs===null?'Нет данных':d.gsiAgeMs<5000?'Получены':'Данные устарели',d.gsiAgeMs!==null&&d.gsiAgeMs<5000],['Модель V2',d.modelVerified?'SHA-256 OK':'Не подтверждена',d.modelVerified],['Экспериментальный режим',d.experimentalActive?'Включён':'Выключен',true],['Микрофон и модель',d.voiceReady?'Готовы':'Не готовы',d.voiceReady],['Хук',d.hookReady?'Активен':'Не готов',d.hookReady],['Режим',d.testOnly?'Тест без нажатий':d.enabled?'Каст включён':'Каст выключен',true],['Порт',String(d.port),d.serverReady],['Профиль',d.profile,true],['Активные фразы',String(d.activePhrases),true]];
       if(d.testOnly)rows.push(['Распознано',d.lastTest?.matched.join(' / ')||'Произнеси фразу',true]);
       for(const [label,value,ok] of rows){const row=document.createElement('div'),v=document.createElement('span');row.className='diag-row';v.className=ok?'oktext':'warntext';v.textContent=value;row.append(document.createTextNode(label),v);host.append(row);}
     }catch(e){$('#diagnostics').textContent='Диагностика недоступна: '+e.message;}
   }
   $('#refreshReport').onclick=refreshDiagnostics;
+  $('#openLogs').onclick=()=>fetch('/open-logs',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   $('#copyReport').onclick=async()=>{try{if(!report)await refreshDiagnostics();if(!report)throw Error('Нет отчёта');const {lastTest,...safe}=report;await navigator.clipboard.writeText(JSON.stringify(safe,null,2));status('Отчёт скопирован','ok');}catch(e){status(e.message,'bad');}};
   refreshDiagnostics();setInterval(refreshDiagnostics,2000);
+  function buildItemModes(){
+    const host=$('#itemModes');host.replaceChildren();
+    for(const [id,name] of [['item_blink','Blink'],['item_overwhelming_blink','Overwhelming'],['item_swift_blink','Swift'],['item_arcane_blink','Arcane']]){
+      const label=document.createElement('label'),select=document.createElement('select');select.className='control';select.dataset.variant=id;
+      for(const [v,t] of [['','Как слот'],['click','Обычный'],['quickcast','Быстрый']])select.add(new Option(t,v));select.value=state.itemModes?.[id]||'';label.append(document.createTextNode(name+' '),select);host.append(label);
+    }
+  }
   $('#importBinds').onclick=async()=>{
     try{const d=await (await fetch('/import-bindings',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();if(!d.ok)throw Error(d.error);
       const {voice,...keys}=d.keys;Object.assign(state.keys,keys);if(voice)state.voice=voice;
-      state.itemModes={...state.itemModes,...d.itemCastModes};
+      state.itemModes={...state.itemModes,...d.itemCastModes};buildItemModes();
       for(const [id,mode] of Object.entries(d.slotCastModes)){const el=$('#'+id+'Mode')||document.querySelector('[data-item-mode="'+id+'"]');if(el)el.value=mode;}
       render();status('Импортировано '+Object.keys(d.keys).length+' клавиш. Проверь и сохрани. '+d.warnings.join('; '),d.warnings.length?'bad':'ok');
     }catch(e){status('Импорт: '+e.message,'bad');}
@@ -350,7 +359,7 @@
       experimentalFrames: $('#experimentalFrames').checked,
       testOnly: $('#testOnly').checked,
       slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value,...Object.fromEntries([...document.querySelectorAll('[data-item-mode]')].map(e=>[e.dataset.itemMode,e.value]))},
-      itemCastModes: state.itemModes||{},
+      itemCastModes: Object.fromEntries([...document.querySelectorAll('[data-variant]')].map(e=>[e.dataset.variant,e.value])),
       voiceChatKey: state.voice,
       castMode: document.querySelector('input[name=castMode]:checked')?.value,
       listen: document.querySelector('input[name=listen]:checked')?.value,
@@ -383,7 +392,7 @@
 
   fetch('/config').then((r) => r.json()).then((c) => {
     state.keys = { ...c.keys };
-    state.slotModes=c.slotCastModes||{};state.itemModes=c.itemCastModes||{};
+    state.slotModes=c.slotCastModes||{};state.itemModes=c.itemCastModes||{};buildItemModes();
     state.voice = String(c.voiceChatKey || '').toUpperCase();
     for (const k of Object.keys(state.keys)) state.keys[k] = String(state.keys[k]).toUpperCase();
     const pick = (name, v) => { const i = document.querySelector(`input[name=${name}][value="${v}"]`); if (i) i.checked = true; };
@@ -398,6 +407,7 @@
     initMic(c.microphone || '');
     build();
     render();
+    if(c.firstRun)$('#importBinds').click();
   }).catch(() => status('Плагин не запущен: открой эту страницу через start.bat', 'bad'));
 </script>
 </body>

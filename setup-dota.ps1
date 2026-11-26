@@ -71,54 +71,11 @@ try { $dota = Find-Dota $steam } catch {
     if (Test-Path -LiteralPath $statePath) {
         try {
             $saved = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-            $candidate = [string]$saved.target -replace '[\\/]game[\\/]dota[\\/]cfg[\\/]gamestate_integration[\\/].+ 'Dota 2 not detected. Enter the installation folder (contains game) or leave empty to cancel' }
-    if (-not $manual) { throw 'Dota 2 installation not found.' }
-    $manual = $manual.Trim('"')
-    if (-not (Test-Path -LiteralPath (Join-Path $manual 'game\bin\win64\dota2.exe') -PathType Leaf)) { throw 'Invalid Dota 2 folder.' }
-    $dota = (Resolve-Path -LiteralPath $manual).Path
-}
-$folder = Join-Path $dota 'game\dota\cfg\gamestate_integration'
-$target = Join-Path $folder $cfgName
-$source = Get-Content -LiteralPath (Join-Path $root $cfgName) -Raw
-$port = 3055
-$token = 'voice_invoke'
-$configPath = Join-Path $root 'config.json'
-if (Test-Path -LiteralPath $configPath) {
-    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-    if ($null -ne $config.port) { $port = [int]$config.port }
-    if ($null -ne $config.authToken) { $token = [string]$config.authToken }
-}
-if ($port -lt 1 -or $port -gt 65535 -or $token -notmatch '^[A-Za-z0-9_-]+$') { throw 'Invalid GSI port or token.' }
-$source = $source.Replace('127.0.0.1:3055/gsi', "127.0.0.1:$port/gsi").Replace('"voice_invoke"', ('"' + $token + '"'))
-$bytes = [Text.UTF8Encoding]::new($false).GetBytes($source)
-$newHash = Hash-Bytes $bytes
-if (Test-Path -LiteralPath $statePath) {
-    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-    if ($state.target -ne $target) { throw 'Dota moved. Uninstall previous integration first.' }
-    if ((Test-Path -LiteralPath $target) -and (Hash-Bytes ([IO.File]::ReadAllBytes($target))) -ne $state.installedHash) { throw 'GSI file changed externally; not overwriting it.' }
-} else {
-    $hadOriginal = Test-Path -LiteralPath $target
-    $original = if ($hadOriginal) { [Convert]::ToBase64String([IO.File]::ReadAllBytes($target)) } else { '' }
-    $state = [pscustomobject]@{target=$target; hadOriginal=$hadOriginal; original=$original; installedHash=$newHash}
-    Write-State $state
-}
-New-Item -ItemType Directory -Path $folder -Force | Out-Null
-[IO.File]::WriteAllBytes($target, $bytes)
-$state.installedHash = $newHash
-Write-State $state
-Write-Host "GSI installed: $target"
-if ($Launch) {
-    if (Get-Process -Name dota2 -ErrorAction SilentlyContinue) {
-        Write-Warning 'Dota is already running. Restart it with this launcher for GSI and borderless settings to apply.'
-    } else {
-        Start-Process -FilePath (Join-Path $steam 'steam.exe') -ArgumentList @('-applaunch','570','-gamestateintegration','-windowed','-noborder')
-    }
-}
-,''
+            $candidate = [string]$saved.target -replace '[\\/]game[\\/]dota[\\/]cfg[\\/]gamestate_integration[\\/].+$',''
             if (Test-Path -LiteralPath (Join-Path $candidate 'game\bin\win64\dota2.exe') -PathType Leaf) { $manual = $candidate }
         } catch {}
     }
-    if (-not $manual) { $manual = Read-Host 'Dota 2 not detected. Enter the installation folder (contains game) or leave empty to cancel'
+    if (-not $manual) { $manual = Read-Host 'Dota 2 not detected. Enter installation folder (contains game) or leave empty to cancel' }
     if (-not $manual) { throw 'Dota 2 installation not found.' }
     $manual = $manual.Trim('"')
     if (-not (Test-Path -LiteralPath (Join-Path $manual 'game\bin\win64\dota2.exe') -PathType Leaf)) { throw 'Invalid Dota 2 folder.' }
