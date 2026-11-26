@@ -217,7 +217,7 @@
 
   async function voiceStatus(ready, message) {
     try {
-      await fetch('/voice-status', { method: 'POST', body: JSON.stringify({ ready, message }) });
+      await fetch('/voice-status', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ready, message }) });
     } catch (e) {}
   }
 
@@ -317,7 +317,7 @@
       sentAt[p] = Date.now();
       batch.push(p);
     }
-    if (batch.length) fetch('/voice', { method: 'POST', body: JSON.stringify({ texts: batch }) }).catch(() => {});
+    if (batch.length) fetch('/voice', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ texts: batch }) }).catch(() => {});
   }
 
   function resetUtterance() {
@@ -372,7 +372,7 @@
       if (rec !== r && !flushing.includes(r)) return;
       const text = m.result.text || '';
       done = (done + ' ' + text).trim();
-      if(testMode&&text)fetch('/voice-test-result',{method:'POST',body:JSON.stringify({transcript:text})}).catch(()=>{});
+      if(testMode&&text)fetch('/voice-test-result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript:text})}).catch(()=>{});
       part = '';
       onRecognition(!!text, true);
       // Итог после отпускания клавиши пришёл — не ждём таймер

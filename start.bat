@@ -24,6 +24,6 @@ set "ELECTRON_RUN_AS_NODE=1"
 if errorlevel 1 goto error
 exit /b 0
 :error
-echo Setup failed. See the exact error above. Node.js 22 x64 is recommended.
+echo Setup failed. See the exact error above. Source build: Node.js 22 or 26 x64 (22 recommended).
 pause
 exit /b 1

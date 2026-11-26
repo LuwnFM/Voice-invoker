@@ -157,6 +157,7 @@ function finishSequence(ok, reason = '') {
 
 function runSequence() {
   while (seq && seqIdx < seq.length) {
+    if (!voice.state.enabled) return finishSequence(false, 'Voice casting disabled');
     if (!isGameActive()) return finishSequence(false, 'Dota lost focus');
     const step = seq[seqIdx];
     if (step.wait > 0 && !step.waited) {
@@ -260,6 +261,7 @@ try {
         runSequence();
       } else if (type === WM_APP_TOGGLE) {
         voice.toggle();
+        if(!voice.state.enabled&&seq)finishSequence(false,'Voice casting disabled');
       } else if (type === WM_APP_VOICE_READY) {
         voice.setVoiceReady(wParam === 1);
       }

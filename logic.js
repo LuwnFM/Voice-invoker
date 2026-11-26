@@ -143,7 +143,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
       if(action===ACTION.SLOT1)steps.push({type:'click',wait:timing.clickDelayMs});
       return steps;
     }
-    const key = (k, wait) => steps.push({ type: 'key', vk: vkOf(k), wait });
+    const key = (k, wait) => {const vk=vkOf(k);if(!vk)throw Error('Unassigned cast key');steps.push({ type: 'key', vk, wait });};
     const gap = timing.keyDelayMs;
 
     let slot = config.keys.slot1; // новая способность всегда встаёт в первый слот

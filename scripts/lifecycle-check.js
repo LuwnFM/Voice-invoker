@@ -78,7 +78,11 @@ async function ready(previous=0) {
   const conflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:{...disabled,invoker_emp:[]}})});
   assert.equal(conflict.status,500,'Re-enabling conflicting alias must be rejected');
   const diag=await (await fetch(base+'/diagnostics')).json();assert.equal(diag.testOnly,true);
-  const testResult=await fetch(base+'/voice',{method:'POST',body:JSON.stringify({texts:['торнадо']})});assert.equal(testResult.status,204);
+  const rejected=await fetch(base+'/voice',{method:'POST',body:JSON.stringify({texts:['торнадо']})});assert.equal(rejected.status,415);
+  const foreign=await fetch(base+'/voice',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://example.invalid'},body:JSON.stringify({texts:['торнадо']})});assert.equal(foreign.status,403);
+  const invalid=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:'null'});assert.equal(invalid.status,500);
+  const keysConflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:{item1:'Q'}})});assert.equal(keysConflict.status,500);
+  const testResult=await fetch(base+'/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texts:['торнадо']})});assert.equal(testResult.status,204);
   const checked=await (await fetch(base+'/diagnostics')).json();assert.deepEqual(checked.lastTest.matched,['торнадо']);
   assert.ok(!fs.readFileSync(path.join(root,'log.txt'),'utf8').includes('"торнадо" ->'));
   console.log('Disabled aliases persisted, test mode records match without dispatch');

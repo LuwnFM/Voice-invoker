@@ -27,6 +27,8 @@ const { readModelWords } = require('./model-words');
 const { resolveCommands } = require('./custom-commands');
 const { importBindings } = require('./dota-bindings');
 const { processStatus } = require('./diagnostics');
+const { allowedHost, allowedOrigin, jsonContentType, readJson } = require('./local-http');
+const { validateKeys } = require('./key-validation');
 const { ACTION, vkOf } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
@@ -204,13 +206,13 @@ function handleGsi(data) {
     const a = data.abilities[k];
     if (!a || !a.name) continue;
     abilities[a.name] = a;
-    if (a.name.startsWith('invoker_empty') || SPELLS.some((s) => s.id === a.name)) slots.push(a.name);
+    if ((a.name.startsWith('invoker_empty') || SPELLS.some((s) => s.id === a.name)) && slots.length<2) slots.push(a.name);
   }
   if (!gsi) log('Данные от Dota получены (GSI работает)');
   gsi = {
     at: Date.now(),
     hero: data.hero?.name || null,
-    alive: data.hero?.alive !== false,
+    alive: data.hero?.alive === true,
     scepter: data.hero?.aghanims_scepter, // undefined, если игра не сообщает
     abilities,
     slots,
@@ -341,6 +343,7 @@ function castByPhrase(command) {
   const spell = SPELLS.find(s=>s.id===id) || (id?.startsWith('item_slot_') ? ITEM_SLOTS.find(s=>s.id===id) : null);
   if (!spell) return;
   if (!last || !last.state.enabled || activeCast?.timedOut) return;
+  if(queue.length>=32)return;
   // Одну и ту же фразу могут услышать обе модели — второй раз не кастуем
   const dedupId = (prepareOnly ? 'prepare:' : 'cast:') + spell.id;
   if (lastQueued.id === dedupId && Date.now() - lastQueued.at < 2500) return;
@@ -403,7 +406,7 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
   }
   // Есть данные от Dota: собираем и ждём, пока способность появится в слоте (см. checkSlot).
   // Вслепую остаётся только фиксированная пауза castDelayMs.
-  if (p.action === ACTION.INVOKE && gsi && Date.now() - gsi.at < 5000) {
+  if (p.action === ACTION.INVOKE && gsi?.hero && Date.now() - gsi.at < 5000) {
     log(`"${phrase}" -> ${spell.name}: Invoke, жду появления в слоте`);
     const from = Date.now();
     if (!dispatchCast(spell, ACTION.PREPARE, profile)) return cast(spell, phrase, { refuse: 'Поток ввода недоступен' });
@@ -429,6 +432,10 @@ function checkSlot() {
   if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled) return;
   const { spell, phrase, from, timer, profile, prepareOnly } = awaitingSlot;
   if (gsi.at < from) return;
+  if(gsi.hero!=='npc_dota_hero_invoker'||gsi.alive!==true||(!prepareOnly&&spell.needsScepter&&gsi.scepter===false)){
+    clearTimeout(timer);awaitingSlot=null;
+    cast(spell,phrase,{refuse:'Состояние героя изменилось после Invoke'});return pump();
+  }
   const id = spell.base || spell.id;
   const slot = gsi.slots.indexOf(id);
   if (slot < 0) return;
@@ -445,10 +452,12 @@ function checkSlot() {
     cast(spell, phrase, { refuse: `${spell.name} на перезарядке (${Math.ceil(own.cooldown)} сек)` });
     return pump();
   }
+  if(own?.can_cast===false){cast(spell,phrase,{refuse:spell.name+': нельзя применить'});return pump();}
   press(spell, phrase, slot === 1 ? ACTION.SLOT2 : ACTION.SLOT1, `в слоте ${slot + 1} через ${Date.now() - from} мс`, profile);
 }
 
 function slotTimeout() {
+  if(!awaitingSlot)return;
   const { spell, phrase } = awaitingSlot;
   awaitingSlot = null;
   cast(spell, phrase, { refuse: `${spell.name} не появилась в слоте` });
@@ -482,20 +491,6 @@ const clients = new Set();
 function broadcast(msg) {
   const data = `data: ${JSON.stringify(msg)}\n\n`;
   for (const res of clients) res.write(data);
-}
-
-function readJson(req) {
-  return new Promise((resolve) => {
-    let body = '';
-    req.on('data', (c) => (body += c));
-    req.on('end', () => {
-      try {
-        resolve(JSON.parse(body));
-      } catch {
-        resolve({});
-      }
-    });
-  });
 }
 
 function sendFile(res, file, type) {
@@ -543,6 +538,7 @@ function saveSettings(body) {
   for (const n of ITEM_KEYS) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
   out.keys = { ...config.keys, ...keys };
   if (okKey(body.voiceChatKey)) out.voiceChatKey = body.voiceChatKey.toUpperCase();
+  validateKeys(out.keys,out.voiceChatKey||config.voiceChatKey);
   if (['click', 'quickcast'].includes(body.castMode)) out.castMode = body.castMode;
   if (['hold', 'always'].includes(body.listen)) out.listen = body.listen;
   if (typeof body.microphone === 'string') out.microphone = body.microphone.slice(0, 200);
@@ -617,16 +613,30 @@ function openSettings() {
     backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true,
   });
   settingsWin.setMenu(null);
+  settingsWin.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  settingsWin.webContents.on('will-navigate',e=>e.preventDefault());
   settingsWin.loadURL(`http://localhost:${config.port}/settings`).catch(e => log('Не удалось открыть настройки:', e.message));
   settingsWin.on('closed', () => (settingsWin = null));
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req,res)=>{
+  handleRequest(req,res).catch(e=>{
+    if(res.headersSent){res.end();return;}
+    res.writeHead(e.statusCode||500,{'Content-Type':'application/json'});
+    res.end(JSON.stringify({ok:false,error:e.statusCode?e.message:'Local request failed'}));
+    if(!e.statusCode)log('Ошибка HTTP:',e.message);
+  });
+});
+async function handleRequest(req,res){
+  if(!allowedHost(req.headers.host,config.port)||!allowedOrigin(req.headers.origin,config.port)){
+    res.writeHead(403);return res.end();
+  }
   const p = new URL(req.url, 'http://localhost').pathname;
   const done = () => {
     res.writeHead(204);
     res.end();
   };
+  if(req.method==='POST'&&p!=='/gsi'&&!jsonContentType(req.headers['content-type'])){res.writeHead(415);return res.end();}
   if (req.method === 'POST' && p === '/gsi') {
     handleGsi(await readJson(req));
     return done();
@@ -704,7 +714,7 @@ const server = http.createServer(async (req, res) => {
       lastTest = {...lastTest,matched:(Array.isArray(texts)?texts:[text]).map(t=>String(t||'').slice(0,200)).slice(0,20), at:Date.now()};
       return done();
     }
-    for (const t of Array.isArray(texts) ? texts : [text]) castByPhrase(String(t || '').trim().toLowerCase());
+    for (const t of (Array.isArray(texts) ? texts : [text]).slice(0,32)) if(typeof t==='string'&&t.length<=200)castByPhrase(t.trim().toLowerCase());
     return done();
   }
   if (req.method === 'POST' && p === '/voice-test-result') {
@@ -721,7 +731,7 @@ const server = http.createServer(async (req, res) => {
   }
   res.writeHead(404);
   res.end();
-});
+}
 setInterval(() => clients.forEach((res) => res.write(': ping\n\n')), 15000);
 
 // ---------- Хук клавиатуры ----------
@@ -760,6 +770,8 @@ function startWorker() {
     hookThreadId = 0;
     if (shutdown) return finishShutdown();
     log('Поток ввода завершён, код:', code);
+    discardWaiting();
+    if(last){last={state:{...last.state,enabled:false,listening:false}};broadcast({...last,event:'toggle'});}
     if (activeCast) handleCastComplete({ id: activeCast.id, ok: false, reason: 'Поток ввода завершён', profile: activeCast.profile, elapsedMs: 0 });
   });
 }
@@ -831,8 +843,10 @@ async function createTray() {
 // ---------- Окно поверх игры (в нём же работает распознавание) ----------
 function createWindow() {
   // Разрешаем доступ к микрофону для нашей страницы
-  session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => cb(permission === 'media'));
-  session.defaultSession.setPermissionCheckHandler((wc, permission) => permission === 'media');
+  const ownOrigin=url=>{try{return new URL(url).origin==='http://localhost:'+config.port;}catch{return false;}};
+  session.defaultSession.setPermissionRequestHandler((wc,permission,cb,details)=>cb(permission==='media'&&ownOrigin(wc?.getURL())&&ownOrigin(details.requestingUrl||wc?.getURL())&&(!details.mediaTypes||details.mediaTypes.every(t=>t==='audio'))));
+  session.defaultSession.setPermissionCheckHandler((wc,permission,origin,details)=>permission==='media'&&ownOrigin(origin)&&(!details.mediaType||details.mediaType==='audio'));
+
 
   const { bounds } = screen.getPrimaryDisplay();
   const win = new BrowserWindow({
@@ -847,6 +861,8 @@ function createWindow() {
     title: 'Voice Invoke',
     webPreferences: { backgroundThrottling: false },
   });
+  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  win.webContents.on('will-navigate',e=>e.preventDefault());
   let recoveries=0;
   win.webContents.on('render-process-gone', () => {
     if(shutdown||win.isDestroyed())return;

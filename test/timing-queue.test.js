@@ -54,7 +54,7 @@ test('split Invoke preserves original profile despite hotkey switch and waits fo
   const req=h.requests[0];assert.equal(req.action,ACTION.PREPARE);
   h.ctx.last.state.timingProfile='fast';
   h.advance(50);
-  h.ctx.gsi={at:1050,slots:[SPELLS[0].id],abilities:{}};
+  h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};
   h.api.checkSlot();assert.equal(h.requests.length,1);
   h.ack(req);assert.equal(h.requests.length,2);
   assert.equal(h.requests[1].action,ACTION.SLOT1);
@@ -64,7 +64,7 @@ test('failed sequence or disabled mode drops queued actions',()=>{
   const h=harness();h.api.castByPhrase('a');h.api.castByPhrase('b');h.ack(h.requests[0],false);
   h.advance(1000);h.api.pump();assert.equal(h.requests.length,1);
   const g=harness(true);g.api.castByPhrase('a');g.ctx.last.state.enabled=false;g.api.discardWaiting();g.ack(g.requests[0]);
-  g.ctx.gsi={at:1100,slots:[SPELLS[0].id],abilities:{}};g.api.checkSlot();assert.equal(g.requests.length,1);
+  g.ctx.gsi={at:1100,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};g.api.checkSlot();assert.equal(g.requests.length,1);
 });
 test('lost completion fails closed until original request responds',()=>{
   const h=harness();h.api.castByPhrase('a');
@@ -79,7 +79,7 @@ test('turbo snapshot persists across GSI, then next command uses newly selected 
   h.api.castByPhrase('a');h.api.castByPhrase('b');
   const req=h.requests[0];assert.equal(req.profile,'turbo');
   h.ctx.last.state.timingProfile='normal';
-  h.advance(50);h.ctx.gsi={at:1050,slots:[SPELLS[0].id],abilities:{}};
+  h.advance(50);h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};
   h.ack(req);assert.equal(h.requests[1].profile,'turbo');
   h.ack(h.requests[1]);h.advance(9);h.api.pump();assert.equal(h.requests.length,2);
   h.advance(1);h.api.pump();assert.equal(h.requests.length,3);assert.equal(h.requests[2].profile,'normal');
@@ -108,4 +108,12 @@ test('voice preparation is integrated into every existing timing profile',()=>{
     h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};
     h.api.checkSlot();assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'prepared');
   }
+});
+
+test('after Invoke, changed hero state or disabled ability prevents slot input',()=>{
+ for(const changed of [{alive:false},{hero:'npc_dota_hero_axe'},{abilities:{[SPELLS[0].id]:{cooldown:0,can_cast:false}}}]){
+  const h=harness(true,true);h.api.castByPhrase('a');h.ack(h.requests[0]);h.advance(50);
+  h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{},...changed};
+  h.api.checkSlot();assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'refuse');
+ }
 });
