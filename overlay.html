@@ -198,6 +198,7 @@
   let model;
   let grammar = [];                     // фразы
   let parse = () => [];
+  let recognitionGate = createRecognitionGate(text => parse(text));
   let lastMeterAt = 0;
   let prerollSamples = 0;
   let audioCtx;
@@ -323,6 +324,7 @@
     done = '';
     part = '';
     sentCount = {};
+    recognitionGate.reset();
     lastKey = null;
     stableSince = 0;
   }
@@ -332,15 +334,19 @@
     clearTimeout(flushTimer);
     flushTimer = null;
     flushing = [];
-    submit(parse(fullText()));
+    // Never commit a tentative preparation from the flush timeout.
+    recognitionGate.read(fullText(), false);
+    submit(recognitionGate.read(done, true));
+    // Preserve ordinary partial fallback only when no preparation cue was heard.
+    submit(recognitionGate.read(fullText(), false));
     resetUtterance();
   }
 
   // Вызывается на каждое событие распознавания (около 20 раз в секунду, пока идёт звук)
-  function onRecognition(textChanged) {
+  function onRecognition(textChanged, finalized = false) {
     const now = Date.now();
     if (textChanged) lastTextAt = now;
-    const list = parse(fullText());
+    const list = recognitionGate.read(fullText(), finalized);
     const key = list.join('|') || null;
     if (key !== lastKey) {
       lastKey = key;
@@ -367,7 +373,7 @@
       const text = m.result.text || '';
       done = (done + ' ' + text).trim();
       part = '';
-      onRecognition(!!text);
+      onRecognition(!!text, true);
       // Итог после отпускания клавиши пришёл — не ждём таймер
       if (flushing.includes(r) && flushTimer) endUtterance();
     });
@@ -378,7 +384,7 @@
     // Быстрое повторное нажатие: предыдущее высказывание закрываем сразу
     if (flushTimer) endUtterance();
     resetUtterance();
-    rec = new model.KaldiRecognizer(audioCtx.sampleRate, JSON.stringify([...grammar, '[unk]']));
+    rec = new model.KaldiRecognizer(audioCtx.sampleRate, JSON.stringify([...recognitionGrammar(grammar), '[unk]']));
     attach(rec);
     for (const buf of preroll) feed(buf);
     preroll.length = 0;
@@ -430,6 +436,8 @@
       void el.offsetWidth;
       el.classList.add('show');
     }
+    if (event === 'prepared') toast('Подготовлено: ' + spell.name, '#6fbf45', 1800);
+    if (event === 'prepare-unconfirmed') toast('Invoke отправлен: ' + spell.name + ' (нет GSI)', '#ff9a2e', 1800);
     if (event === 'refuse') {
       toast(reason, '#ff9a2e', 2500);
       keyClick({ vol: 0.2, tone: 0.6 }); // глухой низкий щелчок

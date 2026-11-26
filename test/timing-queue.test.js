@@ -5,21 +5,23 @@ const path = require('node:path');
 const vm = require('node:vm');
 const SPELLS = require('../spells');
 const { ACTION } = require('../logic');
+const { decodeVoiceCommand } = require('../phrase-parser');
 const { NORMAL, getTiming, normalizeProfile, encodeCast, decodeCast, MAX_CAST_ID } = require('../timing-profiles');
 
-function harness(withGsi = false) {
+function harness(withGsi = false, realPlan = false) {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const start = source.indexOf('const queue = [];');
+  const start = source.indexOf(realPlan ? 'function plan(' : 'const queue = [];');
   const end = source.indexOf('// ---------- HTTP + SSE', start);
   assert.ok(start >= 0 && end > start);
   let now=1000;
   const requests=[], timers=new Map(), events=[];
   let timerId=0;
   const ctx=vm.createContext({
-    SPELLS, ACTION, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
+    SPELLS, ACTION, decodeVoiceCommand, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
     config:{...NORMAL,slotWaitMs:1500,timingProfile:'normal'},
     last:{state:{enabled:true,timingProfile:'normal'}},
-    gsi:withGsi?{at:now,slots:[],abilities:{}}:null,
+    gsi:withGsi?{at:now,hero:'npc_dota_hero_invoker',alive:true,slots:[],abilities:{}}:null,
+    gsiWarned:false,
     predicted:null, prediction:()=>ctx.predicted,
     phraseToSpell:{a:SPELLS[0].id,b:SPELLS[1].id},
     plan:()=>({action:ACTION.INVOKE}),
@@ -81,4 +83,18 @@ test('turbo snapshot persists across GSI, then next command uses newly selected 
   h.ack(req);assert.equal(h.requests[1].profile,'turbo');
   h.ack(h.requests[1]);h.advance(9);h.api.pump();assert.equal(h.requests.length,2);
   h.advance(1);h.api.pump();assert.equal(h.requests.length,3);assert.equal(h.requests[2].profile,'normal');
+});
+
+test('prepare prefix sends only PREPARE, waits for GSI and never presses slot',()=>{
+  const h=harness(true,true);h.api.castByPhrase('подготовить a');
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,ACTION.PREPARE);
+  h.ack(h.requests[0]);h.advance(50);
+  h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{[SPELLS[0].id]:{cooldown:5}}};
+  h.api.checkSlot();assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'prepared');
+  h.api.castByPhrase('a');h.advance(40);h.api.pump();assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'refuse');
+});
+test('existing slot is not reinvoked and no-GSI prepare is unconfirmed',()=>{
+  const h=harness(true,true);h.ctx.gsi.slots=[SPELLS[0].id];h.ctx.gsi.abilities[SPELLS[0].id]={cooldown:8,can_cast:false};h.api.castByPhrase('подготовь a');
+  assert.equal(h.requests.length,0);assert.equal(h.events.at(-1).event,'prepared');
+  const g=harness(false,true);g.api.castByPhrase('запиши в фолиант b');assert.equal(g.requests[0].action,ACTION.PREPARE);g.ack(g.requests[0]);assert.equal(g.requests.length,1);assert.equal(g.events.at(-1).event,'prepare-unconfirmed');
 });

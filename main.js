@@ -10,6 +10,7 @@ const { execFileSync } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
 const { ACTION, vkOf } = require('./logic');
+const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_CAST } = require('./messages');
 
@@ -205,25 +206,26 @@ function prediction() {
 }
 
 // Решаем, что нажимать для способности: { action }, { refuse: причина } или { wait: true }
-function plan(spell) {
+function plan(spell, prepareOnly = false) {
   const fresh = gsi && Date.now() - gsi.at < 5000 && gsi.hero;
   if (!fresh) {
     if (!gsiWarned) log('Нет данных от Dota (GSI) — кастую вслепую: сферы + Invoke + слот 1');
     gsiWarned = true;
-    return { action: ACTION.INVOKE };
+    return prepareOnly ? { action: ACTION.PREPARE, unconfirmed: true } : { action: ACTION.INVOKE };
   }
   gsiWarned = false;
   if (gsi.hero !== 'npc_dota_hero_invoker') return { refuse: 'Герой не Инвокер' };
   if (!gsi.alive) return { refuse: 'Герой мёртв' };
 
-  if (spell.needsScepter && gsi.scepter === false) return { refuse: `${spell.name}: нужен Аганим` };
+  if (!prepareOnly && spell.needsScepter && gsi.scepter === false) return { refuse: `${spell.name}: нужен Аганим` };
 
   // Cataclysm — это Sun Strike, поэтому смотрим на слот базовой способности
   const id = spell.base || spell.id;
   const pr = prediction();
-  if (pr && pr.used.has(id)) return { refuse: `${spell.name} на перезарядке` };
+  if (!prepareOnly && pr && pr.used.has(id)) return { refuse: `${spell.name} на перезарядке` };
   const slot = (pr ? pr.slots : gsi.slots).indexOf(id);
   if (slot >= 0) {
+    if (prepareOnly) return gsi.slots.includes(id) ? { prepared: true } : { wait: true };
     const own = gsi.abilities[id];
     if (own && own.cooldown > 0) return { refuse: `${spell.name} на перезарядке (${Math.ceil(own.cooldown)} сек)` };
     if (own && own.can_cast === false) return { refuse: `${spell.name}: нельзя применить (мана или контроль)` };
@@ -234,7 +236,7 @@ function plan(spell) {
   const invoke = gsi.abilities.invoker_invoke;
   if (invoke && invoke.cooldown > 0) return { refuse: `Invoke на перезарядке (${Math.ceil(invoke.cooldown)} сек)` };
   if (invoke && invoke.can_cast === false) return { refuse: 'Invoke: нельзя применить (мана или контроль)' };
-  return { action: ACTION.INVOKE };
+  return { action: prepareOnly ? ACTION.PREPARE : ACTION.INVOKE };
 }
 
 // ---------- Очередь кастов ----------
@@ -282,8 +284,15 @@ function handleCastComplete(m) {
     return broadcast({ ...last, event: 'refuse', spell: finished.spell, reason: m.reason || 'Ошибка ввода' });
   }
   if (finished.action === ACTION.PREPARE && awaitingSlot && last?.state.enabled) {
-    awaitingSlot.timer = setTimeout(slotTimeout, config.slotWaitMs);
-    checkSlot();
+    if (awaitingSlot.prepareOnly && awaitingSlot.unconfirmed) {
+      const waiting = awaitingSlot;
+      awaitingSlot = null;
+      busyUntil = Date.now() + getTiming(config, waiting.profile).chainGapMs;
+      notifyPrepared(waiting.spell, false);
+    } else {
+      awaitingSlot.timer = setTimeout(slotTimeout, config.slotWaitMs);
+      checkSlot();
+    }
   } else {
     busyUntil = Date.now() + getTiming(config, finished.profile).chainGapMs;
     if (predicted) predicted.after = busyUntil;
@@ -300,14 +309,16 @@ function discardWaiting() {
   gsiWaitUntil = 0;
 }
 
-function castByPhrase(phrase) {
+function castByPhrase(command) {
+  const { phrase, prepareOnly } = decodeVoiceCommand(command);
   const spell = SPELLS.find((s) => s.id === phraseToSpell[phrase]);
   if (!spell) return;
   if (!last || !last.state.enabled || activeCast?.timedOut) return;
   // Одну и ту же фразу могут услышать обе модели — второй раз не кастуем
-  if (lastQueued.id === spell.id && Date.now() - lastQueued.at < 2500) return;
-  lastQueued = { id: spell.id, at: Date.now() };
-  queue.push({ spell, phrase, at: Date.now() });
+  const dedupId = (prepareOnly ? 'prepare:' : 'cast:') + spell.id;
+  if (lastQueued.id === dedupId && Date.now() - lastQueued.at < 2500) return;
+  lastQueued = { id: dedupId, at: Date.now() };
+  queue.push({ spell, phrase, prepareOnly, at: Date.now() });
   pump();
 }
 
@@ -322,13 +333,13 @@ function pump() {
       pumpTimer = setTimeout(pump, busyUntil - now);
       return;
     }
-    const { spell, phrase, at } = queue[0];
+    const { spell, phrase, at, prepareOnly } = queue[0];
     if (now - at > QUEUE_TTL_MS) {
       queue.shift();
       log(`"${phrase}" -> пропущено: слишком долго ждало в очереди`);
       continue;
     }
-    let p = plan(spell);
+    let p = plan(spell, prepareOnly);
     if (p.wait) {
       if (!gsiWaitUntil) gsiWaitUntil = now + GSI_WAIT_MS;
       if (now < gsiWaitUntil) {
@@ -339,14 +350,23 @@ function pump() {
     }
     gsiWaitUntil = 0;
     queue.shift();
-    cast(spell, phrase, p, normalizeProfile(last?.state.timingProfile || config.timingProfile));
+    cast(spell, phrase, p, normalizeProfile(last?.state.timingProfile || config.timingProfile), prepareOnly);
   }
 }
 
-function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)) {
+function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile), prepareOnly = false) {
   if (p.refuse) {
     log(`"${phrase}" -> отказ: ${p.refuse}`);
     return broadcast({ ...last, event: 'refuse', spell, reason: p.refuse });
+  }
+  if (prepareOnly) {
+    if (p.prepared) return notifyPrepared(spell, true);
+    if (p.action !== ACTION.PREPARE) return cast(spell, phrase, { refuse: 'Невозможно подготовить способность' });
+    log(`"${phrase}" -> подготовка ${spell.name}`);
+    const from = Date.now();
+    if (!dispatchCast(spell, ACTION.PREPARE, profile)) return cast(spell, phrase, { refuse: 'Поток ввода недоступен' });
+    awaitingSlot = { spell, phrase, from, profile, prepareOnly: true, unconfirmed: !!p.unconfirmed, timer: null };
+    return;
   }
   // Есть данные от Dota: собираем и ждём, пока способность появится в слоте (см. checkSlot).
   // Вслепую остаётся только фиксированная пауза castDelayMs.
@@ -366,15 +386,27 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
 // пакет GSI показал её там, — а не через фиксированную паузу.
 let awaitingSlot = null; // { spell, phrase, from, timer }
 
+function notifyPrepared(spell, confirmed) {
+  const displaySpell = SPELLS.find(s => s.id === (spell.base || spell.id)) || spell;
+  log(confirmed ? 'Подготовлено:' : 'Invoke отправлен без подтверждения GSI:', displaySpell.name);
+  broadcast({ ...last, event: confirmed ? 'prepared' : 'prepare-unconfirmed', spell: displaySpell });
+}
+
 function checkSlot() {
   if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled) return;
-  const { spell, phrase, from, timer, profile } = awaitingSlot;
+  const { spell, phrase, from, timer, profile, prepareOnly } = awaitingSlot;
   if (gsi.at < from) return;
   const id = spell.base || spell.id;
   const slot = gsi.slots.indexOf(id);
   if (slot < 0) return;
   clearTimeout(timer);
   awaitingSlot = null;
+  if (prepareOnly) {
+    predicted = null;
+    busyUntil = Date.now() + getTiming(config, profile).chainGapMs;
+    notifyPrepared(spell, true);
+    return pump();
+  }
   const own = gsi.abilities[id];
   if (own && own.cooldown > 0) {
     cast(spell, phrase, { refuse: `${spell.name} на перезарядке (${Math.ceil(own.cooldown)} сек)` });
