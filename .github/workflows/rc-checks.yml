@@ -37,3 +37,25 @@ jobs:
           if ($errors.Count) { $errors | Format-List; throw 'Invalid installer syntax' }
       - name: Check installed dependencies
         run: npm ls --depth=0
+
+  publish-rc:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish source release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$(node -p "require('./package.json').version")"
+          if [[ "$tag" != "v1.1.0-rc.1" ]]; then exit 0; fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; not overwriting."
+            exit 0
+          fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.1" --notes-file RELEASE_NOTES.md
