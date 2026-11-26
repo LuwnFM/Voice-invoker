@@ -1,8 +1,21 @@
 // Голосовой каст Инвокера: говоришь название способности — она собирается и применяется.
 // Хук клавиатуры и нажатия — в отдельном потоке (hook-worker.js), распознавание речи —
 // офлайн через Vosk в окне оверлея, состояние способностей — из Dota GSI.
-const { app, BrowserWindow, screen, session } = require('electron');
+const { app, BrowserWindow, screen, session, Tray, Menu, dialog, shell } = require('electron');
 const { Worker } = require('worker_threads');
+// Acquire before touching logs, model or native hooks. Same app name across releases.
+if (!app.requestSingleInstanceLock()) {
+  console.log('Voice Invoker уже запущен. Открываю настройки существующего экземпляра.');
+  app.exit(0);
+  return;
+}
+let settingsRequested = process.env.VI_REOPEN_SETTINGS === '1' || process.argv.includes('--vi-reopen-settings');
+let serverReady = false;
+let tray = null;
+app.on('second-instance', () => {
+  if (serverReady && !shutdown) openSettings();
+  else settingsRequested = true;
+});
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -513,7 +526,9 @@ function saveSettings(body) {
 
 let settingsWin = null;
 function openSettings() {
+  if (shutdown || !serverReady) return;
   if (settingsWin && !settingsWin.isDestroyed()) {
+    if (settingsWin.isMinimized()) settingsWin.restore();
     settingsWin.show();
     return settingsWin.focus();
   }
@@ -522,7 +537,7 @@ function openSettings() {
     backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true,
   });
   settingsWin.setMenu(null);
-  settingsWin.loadURL(`http://localhost:${config.port}/settings`);
+  settingsWin.loadURL(`http://localhost:${config.port}/settings`).catch(e => log('Не удалось открыть настройки:', e.message));
   settingsWin.on('closed', () => (settingsWin = null));
 }
 
@@ -669,14 +684,38 @@ function finishShutdown() {
   clearInterval(shutdown.retry);
   for (const client of clients) client.end();
   clients.clear();
-  server.close();
+  serverReady = false;
+  if (tray && !tray.isDestroyed()) tray.destroy();
+  // Wait for the listening socket to close before allowing another process.
+  const exit = () => {
+    if (shutdown.restart && process.env.VI_SUPERVISED !== '1') {
+      app.relaunch({ args: [...process.argv.slice(1).filter(a => a !== '--vi-reopen-settings'), '--vi-reopen-settings'] });
+    }
+    app.exit(shutdown.restart && process.env.VI_SUPERVISED === '1' ? 75 : shutdown.code);
+  };
+  server.close(exit);
   if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
-  if (shutdown.restart) app.relaunch();
-  app.exit(shutdown.code);
 }
 app.on('before-quit', (event) => {
   if (!exiting) { event.preventDefault(); requestShutdown(false); }
 });
+
+async function createTray() {
+  try {
+    const icon = await app.getFileIcon(process.execPath, { size: 'small' });
+    if (shutdown) return;
+    tray = new Tray(icon);
+    tray.setToolTip('Voice Invoker — работает');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Настройки', click: openSettings },
+      { label: 'Перезапустить', click: () => requestShutdown(true) },
+      { label: 'Открыть журнал', click: () => shell.openPath(LOG_FILE).then(error => { if (error) log(error); }) },
+      { type: 'separator' },
+      { label: 'Выйти из Voice Invoker', click: () => requestShutdown(false) },
+    ]));
+    tray.on('double-click', openSettings);
+  } catch (e) { log('Не удалось создать значок в трее:', e.message); }
+}
 
 // ---------- Окно поверх игры (в нём же работает распознавание) ----------
 function createWindow() {
@@ -710,9 +749,11 @@ function createWindow() {
     }
   });
   const url = `http://localhost:${config.port}/overlay.html?voice=1&sound=1`;
-  const load = () => win.loadURL(url).catch(() => setTimeout(load, 1000));
+  let retry;
+  const load = () => { if (!shutdown && !win.isDestroyed()) win.loadURL(url).catch(() => { if (!shutdown && !win.isDestroyed()) retry = setTimeout(load, 1000); }); };
   load();
-  setInterval(() => !win.isDestroyed() && win.moveTop(), 3000);
+  const topTimer = setInterval(() => !win.isDestroyed() && win.moveTop(), 3000);
+  win.on('closed', () => { clearInterval(topTimer); clearTimeout(retry); });
 }
 
 app.whenReady().then(async () => {
@@ -730,11 +771,14 @@ app.whenReady().then(async () => {
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
       log(`Порт ${config.port} уже занят (плагин уже запущен или порт занят другой программой).`);
-      log('Укажи другой порт в config.json и в файле .cfg для Dota');
+      log('Проверь владельца порта: Get-NetTCPConnection -LocalPort ' + config.port + ' -State Listen');
+      dialog.showErrorBox('Voice Invoker: порт занят', 'Порт ' + config.port + ' уже используется. Закрой предыдущий Voice Invoker или проверь владельца порта. Порт автоматически не меняется.');
     } else log('Ошибка сервера:', e.message);
-    setTimeout(() => requestShutdown(false, 1), 5000);
+    requestShutdown(false, 1);
   });
   server.listen(config.port, '127.0.0.1', () => {
+    if (shutdown) return;
+    serverReady = true;
     const k = config.keys;
     log(`Голосовой каст запущен. Оверлей для OBS: http://localhost:${config.port}/overlay.html`);
     log(`Сферы ${k.quas}/${k.wex}/${k.exort}, Invoke ${k.invoke}, слоты ${k.slot1}/${k.slot2}, каст: ${config.castMode}`);
@@ -744,7 +788,8 @@ app.whenReady().then(async () => {
     log('Ctrl+Shift+F7 — вкл/выкл, Ctrl+Shift+F8 — выход, Ctrl+Shift+F9 — настройки клавиш, Ctrl+Shift+F10 — обычный режим, Ctrl+Shift+F11 — ускоренный, Ctrl+Shift+F12 — турбо');
     startWorker();
     createWindow();
-    if (firstRun) openSettings();
+    createTray();
+    if (firstRun || settingsRequested) { settingsRequested = false; openSettings(); }
   });
 });
 app.on('window-all-closed', () => requestShutdown(false));

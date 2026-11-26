@@ -1,11 +1,11 @@
 {
   "name": "voice-invoke",
-  "version": "1.1.0-rc.5",
+  "version": "1.1.0-rc.6",
   "description": "Перед Invoke нужно произнести название способности вслух — клавиши Dota блокируются, пока не скажешь верно",
   "main": "main.js",
   "private": true,
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/launch.js",
     "test": "node --test",
     "check:runtime": "node scripts/ensure-runtime.js"
   },

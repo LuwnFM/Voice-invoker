@@ -308,7 +308,8 @@
     try {
       await save();
       status('Сохранено, перезапускаю…', 'ok');
-      await fetch('/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const res = await fetch('/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
     } catch (e) { status('Не сохранилось: ' + e.message, 'bad'); }
   };
   document.addEventListener('change', () => status('Есть несохранённые изменения'));
