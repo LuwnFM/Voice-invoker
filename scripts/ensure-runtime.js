@@ -45,7 +45,9 @@ function repairElectron() {
     console.log('Electron ZIP SHA-256 OK; extracting...');
     const stage = path.join(temp, 'dist');
     fs.mkdirSync(stage);
-    run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Expand-Archive -LiteralPath $env:VI_ZIP -DestinationPath $env:VI_DIST -Force -ErrorAction Stop'], { env: { ...process.env, VI_ZIP: zip, VI_DIST: stage } });
+    const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    if (fs.existsSync(tar)) run(tar, ['-xf', zip, '-C', stage]);
+    else run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$ErrorActionPreference="Stop"; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:VI_ZIP, $env:VI_DIST)'], { env: { ...process.env, VI_ZIP: zip, VI_DIST: stage } });
     if (!fs.existsSync(path.join(stage, 'electron.exe'))) throw new Error('Electron executable missing after extraction');
     fs.rmSync(path.join(electronDir, 'dist'), { recursive: true, force: true });
     fs.cpSync(stage, path.join(electronDir, 'dist'), { recursive: true });
