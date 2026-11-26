@@ -11,7 +11,7 @@ node scripts\ensure-runtime.js
 if errorlevel 1 goto error
 call setup-run.bat -Launch
 if errorlevel 1 goto error
-call npm start
+node scripts\launch.js --background
 if errorlevel 1 goto error
 exit /b 0
 :error

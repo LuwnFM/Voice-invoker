@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawnSync, execFileSync } = require('node:child_process');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const exe = path.join(root,'node_modules','electron','dist','electron.exe');
@@ -38,15 +38,19 @@ async function ready(previous=0) {
 (async()=>{
   fs.writeFileSync(config,JSON.stringify({...JSON.parse(original),windowTitle:'Voice Invoker lifecycle test only',blockKeys:[],listen:'hold',keys:{quas:'Q',wex:'W',exort:'E',invoke:'R',slot1:'D',slot2:'F'}}));
   assert.deepEqual(pids(),[],'No pre-existing test Electron');
-  const args=['-e','require("./scripts/launch").launch(process.argv[1])',path.join(__dirname,'lifecycle-entry.js')];
-  const child=spawn(process.execPath,args,{cwd:root,env,stdio:'inherit'});
-  const stopped=new Promise(resolve=>child.once('exit',(code)=>resolve(code)));
-  child.on('error',e=>console.error(e));child.unref();
+  const args=['-e','require("./scripts/launch").launchBackground(process.argv[1])',path.join(__dirname,'lifecycle-entry.js')];
+  const start = () => {
+    const child=spawnSync(process.execPath,args,{cwd:root,env,encoding:'utf8',timeout:15000});
+    assert.equal(child.status,0,child.stderr || String(child.error || ''));
+    const pid=Number(/supervisor PID (\\d+)/.exec(child.stdout)?.[1]);
+    assert.ok(pid, child.stdout);
+    return pid;
+  };
+  const supervisor=start();
+  console.log('Initial launcher exited, detached supervisor PID',supervisor);
   const first=await ready();
   console.log('Initial Electron PID',first,'processes',pids());
-  const duplicate=spawn(process.execPath,args,{cwd:root,env,stdio:'inherit'});
-  const duplicateCode=await new Promise((resolve,reject)=>{duplicate.once('exit',resolve);duplicate.once('error',reject);});
-  assert.equal(duplicateCode,0);
+  const duplicate=start();
   assert.equal(pid(),first);
   await waitFor('duplicate opens settings',()=>fs.existsSync(path.join(dir,'settings-'+first)));
   console.log('Duplicate launch: existing instance settings visible');
@@ -59,10 +63,11 @@ async function ready(previous=0) {
   console.log('Restarted Electron PID',second,'processes',pids());
   fs.writeFileSync(path.join(dir,'quit-'+second),'quit');
   await waitFor('all Electron processes gone',()=>pids().length===0);
-  assert.equal(await stopped,0);
+  const running = id => { try { process.kill(id,0); return true; } catch(e) { if(e.code==='ESRCH') return false; throw e; } };
+  await waitFor('both background supervisors exited',()=>!running(supervisor)&&!running(duplicate));
   const dist=path.dirname(exe),moved=dist+'.lifecycle-check';
   fs.renameSync(dist,moved);fs.renameSync(moved,dist);
-  console.log('PASS: duplicate blocked, settings visible, supervised restart, cached model, normal quit, zero Electron processes, runtime directory rename');
+  console.log('PASS: launcher exited, duplicate blocked, settings visible, detached supervised restart, cached model, normal quit, zero Electron processes and supervisors, runtime directory rename');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{
   for(const id of pids()) {try{execFileSync('taskkill.exe',['/PID',String(id),'/T','/F'],{stdio:'ignore'});}catch{}}
   fs.writeFileSync(config,original);

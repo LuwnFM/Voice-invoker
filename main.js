@@ -1,7 +1,7 @@
 // Голосовой каст Инвокера: говоришь название способности — она собирается и применяется.
 // Хук клавиатуры и нажатия — в отдельном потоке (hook-worker.js), распознавание речи —
 // офлайн через Vosk в окне оверлея, состояние способностей — из Dota GSI.
-const { app, BrowserWindow, screen, session, Tray, Menu, dialog } = require('electron');
+const { app, BrowserWindow, screen, session, Tray, Menu, dialog, shell } = require('electron');
 const { Worker } = require('worker_threads');
 // Acquire before touching logs, model or native hooks. Same app name across releases.
 if (!app.requestSingleInstanceLock()) {
@@ -709,6 +709,7 @@ async function createTray() {
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Настройки', click: openSettings },
       { label: 'Перезапустить', click: () => requestShutdown(true) },
+      { label: 'Открыть журнал', click: () => shell.openPath(LOG_FILE).then(error => { if (error) log(error); }) },
       { type: 'separator' },
       { label: 'Выйти из Voice Invoker', click: () => requestShutdown(false) },
     ]));

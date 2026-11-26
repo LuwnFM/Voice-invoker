@@ -1,6 +1,7 @@
-// Keep the same console and wait for the actual Electron process on restart.
+// Supervise the actual Electron process, optionally independently of the console.
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const fs = require('node:fs');
 const root = path.resolve(__dirname, '..');
 const RESTART = 75;
 function launch(entry = root, reopen = false) {
@@ -14,6 +15,26 @@ function launch(entry = root, reopen = false) {
     else process.exitCode = code === 0 && !signal ? 0 : (code || 1);
   });
 }
-if (require.main === module) launch();
-
-module.exports = { launch };
+// Detached supervisor has no inherited console or pipe handles. Its diagnostic
+// output survives closing the original terminal. It exits when Electron exits.
+function launchBackground(entry = root) {
+  const fd = fs.openSync(path.join(root, 'launcher.log'), 'a');
+  let child;
+  try {
+    child = spawn(process.execPath, ['-e', 'require("./scripts/launch").launch(process.argv[1])', entry], {
+      cwd: root, detached: true, windowsHide: true, stdio: ['ignore', fd, fd],
+    });
+  } finally { fs.closeSync(fd); }
+  child.once('error', e => { console.error('Background launch failed:', e.message); process.exitCode = 1; });
+  child.once('spawn', () => {
+    console.log('Voice Invoker background supervisor PID ' + child.pid);
+    child.unref();
+  });
+}
+if (require.main === module) {
+  try {
+    if (process.argv.includes('--background')) launchBackground();
+    else launch();
+  } catch (e) { console.error('Launch failed:', e.message); process.exitCode = 1; }
+}
+module.exports = { launch, launchBackground };
