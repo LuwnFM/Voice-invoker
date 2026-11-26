@@ -77,6 +77,7 @@ const config = {
   acceptInjected: false,
   debugSteps: false,
 };
+const EXTRA_PHRASES = require('./extra-phrases.json');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 let userConfig = {};
 try {
@@ -90,6 +91,14 @@ try {
 }
 // Клавиши ещё ни разу не настраивались — при запуске откроем окно настроек
 const firstRun = !userConfig.keys;
+
+// Activate new words only with a separately rebuilt and tested graph.
+const expandedModel = path.join(__dirname, 'model', 'vosk-model-small-ru-invoker.tar.gz');
+const useExpanded = userConfig.expandedVocabulary === true && fs.existsSync(expandedModel);
+for (const [suffix, extra] of Object.entries(EXTRA_PHRASES)) {
+  const id = 'invoker_' + suffix;
+  config.phrases[id] = [...new Set([...(config.phrases[id] || []), ...extra.ready, ...(useExpanded ? extra.pending : [])])];
+}
 
 const isRussian = (phrase) => /[а-яё]/i.test(phrase);
 // Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
@@ -106,7 +115,7 @@ const MODEL_DIR = path.join(__dirname, 'model');
 // Русская модель раздаётся архивом .zip, а библиотеке нужен .tar.gz — перепаковываем
 const RU_NAME = 'vosk-model-small-ru-0.22';
 const RU_URL = `https://alphacephei.com/vosk/models/${RU_NAME}.zip`;
-const RU_PATH = path.join(MODEL_DIR, RU_NAME + '.tar.gz');
+const RU_PATH = useExpanded ? expandedModel : path.join(MODEL_DIR, RU_NAME + '.tar.gz');
 
 // Лог идёт в консоль и в файл log.txt (перезаписывается при каждом запуске)
 const LOG_FILE = path.join(__dirname, 'log.txt');
