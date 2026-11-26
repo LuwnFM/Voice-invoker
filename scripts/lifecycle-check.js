@@ -42,7 +42,7 @@ async function ready(previous=0) {
   const start = () => {
     const child=spawnSync(process.execPath,args,{cwd:root,env,encoding:'utf8',timeout:15000});
     assert.equal(child.status,0,child.stderr || String(child.error || ''));
-    const pid=Number(/supervisor PID (\\d+)/.exec(child.stdout)?.[1]);
+    const pid=Number(/supervisor PID (\d+)/.exec(child.stdout)?.[1]);
     assert.ok(pid, child.stdout);
     return pid;
   };
