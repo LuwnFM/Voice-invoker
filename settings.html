@@ -82,7 +82,7 @@
 
 <h2>Проверка</h2>
 <div class="panel" id="diagnostics">Загрузка...</div>
-<div class="actions"><button id="copyReport">Скопировать отчёт</button><button id="refreshReport">Обновить</button><button id="openLogs">Папка журналов</button></div>
+<div class="actions"><button id="copyReport">Скопировать отчёт</button><button id="refreshReport">Обновить</button><button id="openLogs">Папка журналов</button><button id="repairGsi">Проверить / восстановить GSI</button></div>
 <p class="hint">Отчёт не включает пути, Steam ID, токен GSI или записи микрофона.</p>
 <h2>Клавиши в Dota</h2>
 <p class="hint">Должны совпадать с твоими настройками в игре.</p>
@@ -329,11 +329,12 @@
       const r=await fetch('/diagnostics',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);report=await r.json();
       const d=report,host=$('#diagnostics');host.replaceChildren();
       const rows=[['Версия',d.version,true],['Dota 2',d.dotaFound?'Найдена':'Путь не подтверждён',d.dotaFound],['Процесс игры',d.running===null?'Не удалось проверить':d.running?'Запущена':'Не запущена',d.running===true],['Параметр запуска',d.launchFlag===null?'Не проверен':d.launchFlag?'-gamestateintegration':'Отсутствует',d.launchFlag===true],['Инвентарь GSI',d.itemsConfigured?'Настроен':'Требуется запуск start.bat',d.itemsConfigured],['GSI-файл',d.gsiInstalled?(d.gsiConfigMatches?'Установлен':'Не совпадает с настройками'):'Не найден',d.gsiInstalled&&d.gsiConfigMatches],['GSI',d.gsiAgeMs===null?'Нет данных':d.gsiAgeMs<5000?'Получены':'Данные устарели',d.gsiAgeMs!==null&&d.gsiAgeMs<5000],['Модель V2',d.modelVerified?'SHA-256 OK':'Не подтверждена',d.modelVerified],['Экспериментальный режим',d.experimentalActive?'Включён':'Выключен',true],['Микрофон и модель',d.voiceReady?'Готовы':'Не готовы',d.voiceReady],['Хук',d.hookReady?'Активен':'Не готов',d.hookReady],['Режим',d.testOnly?'Тест без нажатий':d.enabled?'Каст включён':'Каст выключен',true],['Порт',String(d.port),d.serverReady],['Профиль',d.profile,true],['Активные фразы',String(d.activePhrases),true]];
-      if(d.testOnly)rows.push(['Распознано',d.lastTest?.matched.join(' / ')||'Произнеси фразу',true]);
+      if(d.testOnly){rows.push(['Текст распознавания',d.lastTest?.transcript||'Произнеси фразу',true]);rows.push(['Совпавшие команды',d.lastTest?.matched?.join(' / ')||'Нет совпадений',true]);}
       for(const [label,value,ok] of rows){const row=document.createElement('div'),v=document.createElement('span');row.className='diag-row';v.className=ok?'oktext':'warntext';v.textContent=value;row.append(document.createTextNode(label),v);host.append(row);}
     }catch(e){$('#diagnostics').textContent='Диагностика недоступна: '+e.message;}
   }
   $('#refreshReport').onclick=refreshDiagnostics;
+  $('#repairGsi').onclick=async()=>{const b=$('#repairGsi');b.disabled=true;try{const d=await (await fetch('/repair-gsi',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();status(d.message||d.error,d.ok?'ok':'bad');await refreshDiagnostics();}catch(e){status(e.message,'bad');}finally{b.disabled=false;}};
   $('#openLogs').onclick=()=>fetch('/open-logs',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   $('#copyReport').onclick=async()=>{try{if(!report)await refreshDiagnostics();if(!report)throw Error('Нет отчёта');const {lastTest,...safe}=report;await navigator.clipboard.writeText(JSON.stringify(safe,null,2));status('Отчёт скопирован','ok');}catch(e){status(e.message,'bad');}};
   refreshDiagnostics();setInterval(refreshDiagnostics,2000);

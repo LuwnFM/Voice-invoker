@@ -1,4 +1,4 @@
-param([switch]$Uninstall, [switch]$Launch)
+param([switch]$Uninstall, [switch]$Launch, [switch]$NoPrompt, [string]$DotaPath)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $statePath = Join-Path $root '.dota-install.json'
@@ -75,6 +75,8 @@ try { $dota = Find-Dota $steam } catch {
             if (Test-Path -LiteralPath (Join-Path $candidate 'game\bin\win64\dota2.exe') -PathType Leaf) { $manual = $candidate }
         } catch {}
     }
+    if (-not $manual -and $DotaPath) { $manual = $DotaPath }
+    if (-not $manual -and $NoPrompt) { throw 'DOTA_NOT_FOUND' }
     if (-not $manual) { $manual = Read-Host 'Dota 2 not detected. Enter installation folder (contains game) or leave empty to cancel' }
     if (-not $manual) { throw 'Dota 2 installation not found.' }
     $manual = $manual.Trim('"')

@@ -372,6 +372,7 @@
       if (rec !== r && !flushing.includes(r)) return;
       const text = m.result.text || '';
       done = (done + ' ' + text).trim();
+      if(testMode&&text)fetch('/voice-test-result',{method:'POST',body:JSON.stringify({transcript:text})}).catch(()=>{});
       part = '';
       onRecognition(!!text, true);
       // Итог после отпускания клавиши пришёл — не ждём таймер
@@ -407,8 +408,9 @@
 
 
   // ---------- Отрисовка состояния ----------
-  let wantListening = false;
+  let wantListening = false, testMode = false;
   function render({ state: s, event, spell, reason, aim }) {
+    testMode = !!s.testOnly;
     wantListening = s.enabled && (s.listening || s.testOnly);
     if (VOICE) {
       if (wantListening) startListening();

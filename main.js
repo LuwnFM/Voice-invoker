@@ -19,7 +19,7 @@ app.on('second-instance', () => {
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
 const { ITEM_COMMAND, ITEM_SLOTS, planBlink } = require('./items');
@@ -552,6 +552,30 @@ function saveSettings(body) {
   log('Настройки сохранены в config.json');
 }
 
+let repairingGsi=false;
+async function repairGsi(){
+  if(repairingGsi)return {ok:false,error:'Восстановление уже выполняется'};
+  repairingGsi=true;
+  const run=folder=>new Promise((resolve,reject)=>{
+    const args=['-NoProfile','-NonInteractive','-File',path.join(__dirname,'setup-dota.ps1'),'-NoPrompt'];
+    if(folder)args.push('-DotaPath',folder);
+    execFile('powershell.exe',args,{cwd:__dirname,windowsHide:true,timeout:30000},(error,stdout,stderr)=>{
+      if(error)reject(new Error(String(stderr||stdout||error.message)));else resolve();
+    });
+  });
+  try {
+    const confirm=await dialog.showMessageBox({type:'question',buttons:['Восстановить','Отмена'],defaultId:1,cancelId:1,title:'Voice Invoker',message:'Проверить и восстановить только файл GSI Voice Invoker?',detail:'Steam и Dota не будут закрыты, личные бинды и параметры Steam не изменяются.'});
+    if(confirm.response!==0)return {ok:false,error:'Отменено'};
+    try {await run();}catch(e){
+      if(!e.message.includes('DOTA_NOT_FOUND'))throw e;
+      const choice=await dialog.showOpenDialog({title:'Выбери папку установки Dota 2 (с папкой game)',properties:['openDirectory']});
+      if(choice.canceled||!choice.filePaths[0])return {ok:false,error:'Папка не выбрана'};
+      await run(choice.filePaths[0]);
+    }
+    return {ok:true,message:'GSI проверен. Если игра была открыта, перезапусти Dota для загрузки файла.'};
+  }catch(e){log('Ошибка восстановления GSI:',e.message);return {ok:false,error:'Не удалось восстановить GSI. Проверь журнал и разрешения Windows; при блокировке скрипта используй start.bat.'};}
+  finally{repairingGsi=false;}
+}
 async function diagnostics() {
   let installed = false, cfgMatches = false, itemsConfigured = false, dotaFound = false;
   const process = await processStatus();
@@ -608,6 +632,9 @@ const server = http.createServer(async (req, res) => {
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
   if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
   if (p === '/settings') return sendFile(res, path.join(__dirname, 'settings.html'), 'text/html; charset=utf-8');
+  if (p === '/repair-gsi' && req.method === 'POST' && String(req.headers['content-type']||'').startsWith('application/json')) {
+    res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify(await repairGsi()));
+  }
   if (p === '/open-logs' && req.method === 'POST' && String(req.headers['content-type']||'').startsWith('application/json')) {
     await shell.openPath(__dirname);return done();
   }
@@ -657,10 +684,14 @@ const server = http.createServer(async (req, res) => {
     if (shutdown) return done();
     const { text, texts } = await readJson(req);
     if (testOnly) {
-      lastTest = {matched:(Array.isArray(texts)?texts:[text]).map(t=>String(t||'').slice(0,200)).slice(0,20), at:Date.now()};
+      lastTest = {...lastTest,matched:(Array.isArray(texts)?texts:[text]).map(t=>String(t||'').slice(0,200)).slice(0,20), at:Date.now()};
       return done();
     }
     for (const t of Array.isArray(texts) ? texts : [text]) castByPhrase(String(t || '').trim().toLowerCase());
+    return done();
+  }
+  if (req.method === 'POST' && p === '/voice-test-result') {
+    if(testOnly){const {transcript}=await readJson(req);lastTest={...lastTest,transcript:String(transcript||'').slice(0,400),at:Date.now()};}
     return done();
   }
   if (req.method === 'POST' && p === '/voice-status') {

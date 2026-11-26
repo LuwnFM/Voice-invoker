@@ -17,3 +17,8 @@ test('individual slot quickcast overrides global mode',()=>{
  assert.equal(v.buildSequence(spell,ACTION.SLOT1).length,2);
  assert.equal(v.buildSequence(spell,ACTION.SLOT2).length,1);
 });
+
+test('tray and keyboard toggle use the same state change',()=>{
+ const {createVoiceCast}=require('../logic');const v=createVoiceCast({keys:{},listen:'always'},{isGameActive:()=>true,emit(){},quit(){}});
+ v.toggle();assert.equal(v.state.enabled,false);v.toggle();assert.equal(v.state.enabled,true);
+});

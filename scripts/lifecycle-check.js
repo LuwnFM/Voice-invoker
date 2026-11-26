@@ -56,12 +56,24 @@ async function ready(previous=0) {
   assert.equal(pid(),first);
   await waitFor('duplicate opens settings',()=>fs.existsSync(path.join(dir,'settings-'+first)));
   console.log('Duplicate launch: existing instance settings visible');
+  // Disabled aliases must disappear from the live grammar after restart.
+  const preferences=await (await fetch(base+'/config')).json();
+  const disabled={...preferences.disabledPhrases,invoker_emp:preferences.phraseCatalog.invoker_emp};
+  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true})});
+  assert.equal(saved.status,200);
   const r=await fetch(base+'/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   assert.equal(r.status,204);
   const second=await ready(first);
   await waitFor('old main process gone',()=>!pids().includes(first));
   await waitFor('settings reopen after restart',()=>fs.existsSync(path.join(dir,'settings-'+second)));
   assert.ok(!fs.readFileSync(path.join(root,'log.txt'),'utf8').includes('Скачиваю модель Invoker V2'));
+  const grammar=await (await fetch(base+'/grammar')).json();
+  assert.ok(preferences.phraseCatalog.invoker_emp.every(p=>!grammar.includes(p)));
+  const diag=await (await fetch(base+'/diagnostics')).json();assert.equal(diag.testOnly,true);
+  const testResult=await fetch(base+'/voice',{method:'POST',body:JSON.stringify({texts:['торнадо']})});assert.equal(testResult.status,204);
+  const checked=await (await fetch(base+'/diagnostics')).json();assert.deepEqual(checked.lastTest.matched,['торнадо']);
+  assert.ok(!fs.readFileSync(path.join(root,'log.txt'),'utf8').includes('"торнадо" ->'));
+  console.log('Disabled aliases persisted, test mode records match without dispatch');
   console.log('Restarted Electron PID',second,'processes',pids());
   fs.writeFileSync(path.join(dir,'quit-'+second),'quit');
   await waitFor('all Electron processes gone',()=>pids().length===0);
