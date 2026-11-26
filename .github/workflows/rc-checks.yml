@@ -46,7 +46,6 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          Get-ChildItem -Path . -File -Filter *.ps1; Get-ChildItem -Path scripts -File -Filter *.ps1 | Out-Null
           foreach ($script in @(Get-ChildItem -Path . -File -Filter *.ps1) + @(Get-ChildItem -Path scripts -File -Filter *.ps1)) {
             [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
             if ($errors.Count) { $errors | Format-List; throw "Invalid syntax: $script" }

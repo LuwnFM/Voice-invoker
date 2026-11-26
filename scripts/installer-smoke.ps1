@@ -18,7 +18,7 @@ try {
   $manifest=Get-Content -LiteralPath (Join-Path $app 'model-manifest.json') -Raw | ConvertFrom-Json
   if((Get-FileHash -LiteralPath $model).Hash -ne $manifest.sha256){throw 'Model hash invalid'}
   $config=Join-Path $app 'config.json'
-  $prefs='{"voiceChatKey":"MOUSE4","customSpellPhrases":{"invoker_tornado":["ураган"]},"itemPhrases":{"item_slot_item1":["щит"]},"testOnly":true}'
+  $prefs='{"voiceChatKey":"MOUSE4","customSpellPhrases":{"invoker_tornado":["\u0443\u0440\u0430\u0433\u0430\u043d"]},"itemPhrases":{"item_slot_item1":["\u0449\u0438\u0442"]},"testOnly":true}'
   [IO.File]::WriteAllText($config,$prefs)
   New-Item -ItemType Directory -Path (Join-Path $dota 'game\bin\win64'),(Split-Path -Parent $cfg) -Force | Out-Null
   New-Item -ItemType File -Path (Join-Path $dota 'game\bin\win64\dota2.exe') | Out-Null
