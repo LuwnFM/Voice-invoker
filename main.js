@@ -9,7 +9,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
-const { ACTION, createVoiceCast, vkOf } = require('./logic');
+const { ACTION, vkOf } = require('./logic');
+const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_CAST } = require('./messages');
 
 const config = {
@@ -30,6 +31,7 @@ const config = {
   //   "quickcast" — только клавиша (в Dota включён быстрый каст)
   castMode: 'click',
   // Паузы между нажатиями, мс
+  timingProfile: 'normal',
   keyDelayMs: 35,
   castDelayMs: 90,   // после Invoke перед клавишей способности (только без данных от Dota)
   slotWaitMs: 1500,  // сколько ждём появления способности в слоте после Invoke
@@ -239,20 +241,69 @@ function plan(spell) {
 // Способности, названные подряд, применяются одна за другой: следующая начинается, как только
 // поток хука закончит нажатия предыдущей.
 const queue = [];          // { spell, phrase, at }
-let busyUntil = 0;         // до этого момента поток хука выполняет предыдущую серию нажатий
+let busyUntil = 0;         // пауза после подтверждённой серии
+let activeCast = null;
+let castRequestId = 0;
 let pumpTimer = null;
 let gsiWaitUntil = 0;
 let lastQueued = { id: null, at: 0 };
 const GSI_WAIT_MS = 400;   // сколько ждём данных Dota об Invoke перед следующей сборкой
 const QUEUE_TTL_MS = 3000; // слишком долго ждавшие команды выбрасываем
-// Те же шаги, что выполнит поток хука, — чтобы знать длительность серии нажатий
-const sequencer = createVoiceCast(config, { isGameActive: () => true, emit() {}, quit() {} });
-const sequenceMs = (spell, action) => sequencer.buildSequence(spell, action).reduce((t, st) => t + (st.wait || 0), 0);
+// Only one request can be in flight; no estimated completion from nominal waits.
+function dispatchCast(spell, action, profile) {
+  if (activeCast) return false;
+  castRequestId = castRequestId % MAX_CAST_ID + 1;
+  const id = castRequestId;
+  if (!toHook(WM_APP_CAST, SPELLS.indexOf(spell) + 1, encodeCast(action, profile, id))) return false;
+  activeCast = { id, spell, action, profile, timedOut: false };
+  const timing = getTiming(config, profile);
+  // Fail closed if the worker stops responding; do not send another series until it replies.
+  const limit = 5000 + 3 * timing.keyDelayMs + timing.castDelayMs + timing.clickDelayMs + 2 * timing.altDelayMs;
+  activeCast.watchdog = setTimeout(() => {
+    if (activeCast?.id !== id) return;
+    activeCast.timedOut = true;
+    discardWaiting();
+    log('Поток ввода не подтвердил завершение; новые команды остановлены до ответа');
+  }, limit);
+  return true;
+}
+
+function handleCastComplete(m) {
+  if (!activeCast || m.id !== activeCast.id) return;
+  const finished = activeCast;
+  clearTimeout(finished.watchdog);
+  activeCast = null;
+  if (finished.timedOut) m = { ...m, ok: false, reason: 'Тайм-аут подтверждения ввода' };
+  if (config.debugSteps || !m.ok) log('Каст:', finished.spell.name, m.profile, Math.round(m.elapsedMs) + ' мс', m.ok ? 'OK' : m.reason);
+  if (!m.ok) {
+    discardWaiting();
+    predicted = null;
+    busyUntil = 0;
+    return broadcast({ ...last, event: 'refuse', spell: finished.spell, reason: m.reason || 'Ошибка ввода' });
+  }
+  if (finished.action === ACTION.PREPARE && awaitingSlot && last?.state.enabled) {
+    awaitingSlot.timer = setTimeout(slotTimeout, config.slotWaitMs);
+    checkSlot();
+  } else {
+    busyUntil = Date.now() + getTiming(config, finished.profile).chainGapMs;
+    if (predicted) predicted.after = busyUntil;
+  }
+  pump();
+}
+
+function discardWaiting() {
+  queue.length = 0;
+  if (awaitingSlot) clearTimeout(awaitingSlot.timer);
+  awaitingSlot = null;
+  clearTimeout(pumpTimer);
+  pumpTimer = null;
+  gsiWaitUntil = 0;
+}
 
 function castByPhrase(phrase) {
   const spell = SPELLS.find((s) => s.id === phraseToSpell[phrase]);
   if (!spell) return;
-  if (!last || !last.state.enabled) return;
+  if (!last || !last.state.enabled || activeCast?.timedOut) return;
   // Одну и ту же фразу могут услышать обе модели — второй раз не кастуем
   if (lastQueued.id === spell.id && Date.now() - lastQueued.at < 2500) return;
   lastQueued = { id: spell.id, at: Date.now() };
@@ -264,7 +315,8 @@ function castByPhrase(phrase) {
 function pump() {
   clearTimeout(pumpTimer);
   pumpTimer = null;
-  while (queue.length && !awaitingSlot) {
+  if (!last?.state.enabled) { discardWaiting(); return; }
+  while (queue.length && !awaitingSlot && !activeCast) {
     const now = Date.now();
     if (now < busyUntil) {
       pumpTimer = setTimeout(pump, busyUntil - now);
@@ -287,11 +339,11 @@ function pump() {
     }
     gsiWaitUntil = 0;
     queue.shift();
-    cast(spell, phrase, p);
+    cast(spell, phrase, p, normalizeProfile(last?.state.timingProfile || config.timingProfile));
   }
 }
 
-function cast(spell, phrase, p) {
+function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)) {
   if (p.refuse) {
     log(`"${phrase}" -> отказ: ${p.refuse}`);
     return broadcast({ ...last, event: 'refuse', spell, reason: p.refuse });
@@ -300,14 +352,13 @@ function cast(spell, phrase, p) {
   // Вслепую остаётся только фиксированная пауза castDelayMs.
   if (p.action === ACTION.INVOKE && gsi && Date.now() - gsi.at < 5000) {
     log(`"${phrase}" -> ${spell.name}: Invoke, жду появления в слоте`);
-    toHook(WM_APP_CAST, SPELLS.indexOf(spell) + 1, ACTION.PREPARE);
     const from = Date.now();
-    busyUntil = from + sequenceMs(spell, ACTION.PREPARE);
-    awaitingSlot = { spell, phrase, from, timer: setTimeout(slotTimeout, config.slotWaitMs) };
+    if (!dispatchCast(spell, ACTION.PREPARE, profile)) return cast(spell, phrase, { refuse: 'Поток ввода недоступен' });
+    awaitingSlot = { spell, phrase, from, profile, timer: null };
     return;
   }
   const how = { [ACTION.SLOT1]: 'уже в слоте 1', [ACTION.SLOT2]: 'уже в слоте 2', [ACTION.INVOKE]: 'Invoke + слот 1' }[p.action];
-  press(spell, phrase, p.action, how);
+  press(spell, phrase, p.action, how, profile);
 }
 
 // ---------- Ожидание способности в слоте после Invoke ----------
@@ -316,16 +367,20 @@ function cast(spell, phrase, p) {
 let awaitingSlot = null; // { spell, phrase, from, timer }
 
 function checkSlot() {
-  if (!awaitingSlot) return;
-  const { spell, phrase, from, timer } = awaitingSlot;
+  if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled) return;
+  const { spell, phrase, from, timer, profile } = awaitingSlot;
+  if (gsi.at < from) return;
   const id = spell.base || spell.id;
   const slot = gsi.slots.indexOf(id);
   if (slot < 0) return;
   clearTimeout(timer);
   awaitingSlot = null;
   const own = gsi.abilities[id];
-  if (own && own.cooldown > 0) return cast(spell, phrase, { refuse: `${spell.name} на перезарядке (${Math.ceil(own.cooldown)} сек)` });
-  press(spell, phrase, slot === 1 ? ACTION.SLOT2 : ACTION.SLOT1, `в слоте ${slot + 1} через ${Date.now() - from} мс`);
+  if (own && own.cooldown > 0) {
+    cast(spell, phrase, { refuse: `${spell.name} на перезарядке (${Math.ceil(own.cooldown)} сек)` });
+    return pump();
+  }
+  press(spell, phrase, slot === 1 ? ACTION.SLOT2 : ACTION.SLOT1, `в слоте ${slot + 1} через ${Date.now() - from} мс`, profile);
 }
 
 function slotTimeout() {
@@ -335,10 +390,9 @@ function slotTimeout() {
   pump();
 }
 
-function press(spell, phrase, action, how) {
+function press(spell, phrase, action, how, profile) {
   log(`"${phrase}" -> ${spell.name} (${how})${queue.length ? `, дальше в очереди: ${queue.length}` : ''}`);
-  toHook(WM_APP_CAST, SPELLS.indexOf(spell) + 1, action);
-  busyUntil = Date.now() + sequenceMs(spell, action) + config.chainGapMs;
+  if (!dispatchCast(spell, action, profile)) return cast(spell, phrase, { refuse: 'Поток ввода недоступен' });
   if (gsi) {
     const pr = prediction() || { slots: [...gsi.slots], used: new Set(), invoked: false };
     const id = spell.base || spell.id;
@@ -347,7 +401,7 @@ function press(spell, phrase, action, how) {
       pr.invoked = true;
     }
     pr.used.add(id);
-    pr.after = busyUntil;
+    pr.after = Infinity;
     predicted = pr;
   }
   // Положение курсора для плашки способности (подходит и для OBS)
@@ -518,6 +572,8 @@ function startWorker() {
   worker.on('message', (m) => {
     if (m.type === 'quit') return app.exit(0);
     if (m.type === 'log') return log(m.text);
+    if (m.type === 'cast-complete') return handleCastComplete(m);
+    if (m.type === 'step' && config.debugSteps) return log('Шаг:', m.edge, m.step, Math.round(m.elapsedMs) + ' мс');
     if (m.type === 'settings') return openSettings();
     if (m.type === 'ready') {
       hookThreadId = m.threadId;
@@ -526,12 +582,18 @@ function startWorker() {
     }
     if (m.type === 'state') {
       last = { state: m.state };
+      if (!m.state.enabled) discardWaiting();
       broadcast({ ...last, event: m.event });
+      if (m.event === 'profile') log('Режим задержек:', profileLabel(m.state.timingProfile));
       if (m.event === 'blocked') log('Клавиша заблокирована: способности только голосом');
       if (m.event === 'toggle') log(m.state.enabled ? 'Голосовой каст ВКЛЮЧЁН' : 'Голосовой каст ВЫКЛЮЧЕН');
     }
   });
   worker.on('error', (e) => log('Ошибка потока хука:', e.stack || e));
+  worker.on('exit', () => {
+    hookThreadId = 0;
+    if (activeCast) handleCastComplete({ id: activeCast.id, ok: false, reason: 'Поток ввода завершён', profile: activeCast.profile, elapsedMs: 0 });
+  });
 }
 
 // ---------- Окно поверх игры (в нём же работает распознавание) ----------
@@ -596,7 +658,7 @@ app.whenReady().then(async () => {
     log(config.listen === 'always' || !config.voiceChatKey
       ? 'Слушаю микрофон постоянно'
       : `Слушаю, пока зажата клавиша голосового чата ${String(config.voiceChatKey).toUpperCase()}`);
-    log('Ctrl+Shift+F7 — вкл/выкл, Ctrl+Shift+F8 — выход, Ctrl+Shift+F9 — настройки клавиш');
+    log('Ctrl+Shift+F7 — вкл/выкл, Ctrl+Shift+F8 — выход, Ctrl+Shift+F9 — настройки клавиш, Ctrl+Shift+F10 — обычный режим, Ctrl+Shift+F11 — ускоренный, Ctrl+Shift+F12 — турбо');
     startWorker();
     createWindow();
     if (firstRun) openSettings();

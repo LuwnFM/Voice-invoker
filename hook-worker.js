@@ -6,6 +6,7 @@ const { parentPort, workerData } = require('worker_threads');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
 const { createVoiceCast } = require('./logic');
+const { decodeCast } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST } = require('./messages');
 
 const config = workerData.config;
@@ -138,35 +139,57 @@ const voice = createVoiceCast(config, {
 });
 
 // ---------- Выполнение последовательности нажатий ----------
-let seq = null;    // текущая последовательность шагов
+let seq = null;
 let seqIdx = 0;
 let seqTimer = 0;
+let request = null;
+let altHeld = false;
+
+function finishSequence(ok, reason = '') {
+  if (seqTimer) { KillTimer(null, seqTimer); seqTimer = 0; }
+  if (altHeld) { keyEdge(0xa4, true); altHeld = false; }
+  const done = request;
+  seq = null;
+  request = null;
+  if (done) parentPort.postMessage({ type: 'cast-complete', id: done.id, ok, reason, profile: done.profile, elapsedMs: Number(process.hrtime.bigint() - done.started) / 1e6 });
+}
 
 function runSequence() {
   while (seq && seqIdx < seq.length) {
+    if (!isGameActive()) return finishSequence(false, 'Dota lost focus');
     const step = seq[seqIdx];
     if (step.wait > 0 && !step.waited) {
       step.waited = true;
       seqTimer = SetTimer(null, 0, step.wait, null);
+      if (!seqTimer) finishSequence(false, 'SetTimer failed');
       return;
     }
-    if (config.debugSteps) parentPort.postMessage({ type: 'step', step: step.type === 'click' ? 'click' : step.vk, edge: step.type });
-    if (step.type === 'click') leftClick();
-    else if (step.type === 'down' || step.type === 'up') keyEdge(step.vk, step.type === 'up');
-    else pressKey(step.vk);
+    if (config.debugSteps) parentPort.postMessage({ type: 'step', step: step.type === 'click' ? 'click' : step.vk, edge: step.type, elapsedMs: Number(process.hrtime.bigint() - request.started) / 1e6 });
+    let count;
+    if (step.type === 'click') count = leftClick();
+    else if (step.type === 'down' || step.type === 'up') {
+      count = keyEdge(step.vk, step.type === 'up');
+      if (count === 1 && step.vk === 0xa4) altHeld = step.type === 'down';
+    } else count = pressKey(step.vk);
+    if (count !== (step.type === 'down' || step.type === 'up' ? 1 : 2)) {
+      // A partial down/up pair must not leave a key held.
+      if (count === 1 && step.type === 'key') keyEdge(step.vk, true);
+      if (count === 1 && step.type === 'click') SendMouseInput(1, [mouseInput(MOUSEEVENTF_LEFTUP)], koffi.sizeof(MOUSE_INPUT));
+      return finishSequence(false, 'SendInput failed');
+    }
     seqIdx++;
   }
-  seq = null;
-  if (pending.length) startCast(...pending.shift());
+  finishSequence(true);
 }
 
-const pending = []; // касты, пришедшие во время предыдущей серии нажатий
-
-function startCast(spell, action) {
-  if (!voice.state.enabled || !isGameActive()) return;
-  // Предыдущий каст ещё выполняется — этот начнём сразу после него
-  if (seq) return pending.push([spell, action]);
-  seq = voice.buildSequence(spell, action);
+function startCast(spell, encoded) {
+  const command = decodeCast(encoded);
+  if (!spell || !voice.state.enabled || !isGameActive() || seq) {
+    parentPort.postMessage({ type: 'cast-complete', id: command.id, ok: false, reason: 'Cast not accepted', profile: command.profile, elapsedMs: 0 });
+    return;
+  }
+  request = { ...command, started: process.hrtime.bigint() };
+  seq = voice.buildSequence(spell, command.action, command.profile);
   seqIdx = 0;
   runSequence();
 }
@@ -237,10 +260,11 @@ if (!hook) {
       } else if (type === WM_APP_VOICE_READY) {
         voice.setVoiceReady(wParam === 1);
       } else if (type === WM_APP_QUIT) {
+        finishSequence(false, 'Application quit');
         parentPort.postMessage({ type: 'quit' });
       }
     } catch (e) {
-      seq = null;
+      finishSequence(false, e.message);
       parentPort.postMessage({ type: 'log', text: 'Ошибка потока хука: ' + e.stack });
     }
   }

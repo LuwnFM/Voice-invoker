@@ -1,7 +1,7 @@
 name: RC checks
 on:
   push:
-    branches: [main, voice-dictionary-setup, rc2-model-download]
+    branches: [main, voice-dictionary-setup, rc2-model-download, timing-profiles]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -71,9 +71,9 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$(node -p "require('./package.json').version")"
-          if [[ "$tag" != "v1.1.0-rc.2" ]]; then exit 0; fi
+          if [[ "$tag" != "v1.1.0-rc.3" ]]; then exit 0; fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $tag already exists; not overwriting."
             exit 0
           fi
-          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.2" --notes-file RELEASE_NOTES.md
+          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.3" --notes-file RELEASE_NOTES.md
