@@ -10,8 +10,8 @@ test('local HTTP checks host, origin and JSON media type',()=>{
 test('bounded JSON reader rejects malformed and oversized body',async()=>{
  const input=x=>Readable.from([Buffer.from(x)]);
  assert.deepEqual(await readJson(input('{"x":1}')),{x:1});
- for(const v of ['null','[]','{'])await assert.rejects(readJson(input(v)),e=>e.statusCode===400);
- await assert.rejects(readJson(input('x'.repeat(MAX_BODY_BYTES+1))),e=>e.statusCode===413);
+ for(const v of ['null','[]','{'])await assert.rejects(readJson(input(v)),e=>e instanceof Error && 'statusCode' in e && e.statusCode===400);
+ await assert.rejects(readJson(input('x'.repeat(MAX_BODY_BYTES+1))),e=>e instanceof Error && 'statusCode' in e && e.statusCode===413);
 });
 test('key conflicts rejected server-side including item slots',()=>{
  validateKeys({quas:'Q',item1:'X',item2:''},'G');

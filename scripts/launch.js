@@ -5,10 +5,12 @@ const fs = require('node:fs');
 const root = path.resolve(__dirname, '..');
 const RESTART = 75;
 function launch(entry = root, reopen = false) {
+  /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, VI_SUPERVISED: '1', VI_REOPEN_SETTINGS: reopen ? '1' : '0' };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.ELECTRON_OVERRIDE_DIST_PATH;
   const executable = process.env.VI_PACKAGED==='1' ? process.execPath : require('electron');
+  if(typeof executable!=='string')throw Error('Electron executable path unavailable');
   const child = spawn(executable, [entry], { cwd: root, env, stdio: 'inherit' });
   child.once('error', e => { console.error('Electron launch failed:', e.message); process.exitCode = 1; });
   child.once('exit', (code, signal) => {

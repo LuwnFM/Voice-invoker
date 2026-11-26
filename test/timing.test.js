@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createVoiceCast, ACTION, vkOf } = require('../logic');
-const { NORMAL, FAST, TURBO, MAX_CAST_ID, getTiming, encodeCast, decodeCast } = require('../timing-profiles');
+const { NORMAL, MAX_CAST_ID, getTiming, encodeCast, decodeCast } = require('../timing-profiles');
 const spells = require('../spells');
 const config = { keys: { quas:'Q', wex:'W', exort:'E', invoke:'R', slot1:'D', slot2:'F' }, voiceChatKey:'G', listen:'hold', castMode:'click', blockKeys:['invoke'], ...NORMAL };
 const build = (cfg = config, emit = () => {}) => createVoiceCast(cfg, { isGameActive: () => true, emit, quit() {} });

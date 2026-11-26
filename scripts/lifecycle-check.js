@@ -11,6 +11,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(),'vi-lifecycle-'));
 const config = path.join(root,'config.json');
 const original = fs.readFileSync(config);
 const base = 'http://127.0.0.1:3055';
+/** @type {NodeJS.ProcessEnv} */
 const env = {...process.env, VI_LIFECYCLE_DIR:dir, VI_EXE:exe};
 if(packaged)env.ELECTRON_RUN_AS_NODE='1';else delete env.ELECTRON_RUN_AS_NODE;
 const pause = ms => new Promise(resolve=>setTimeout(resolve,ms));
@@ -44,7 +45,7 @@ async function ready(previous=0) {
   const start = () => {
     const child=spawnSync(launcher,args,{cwd:root,env,encoding:'utf8',timeout:15000});
     assert.equal(child.status,0,child.stderr || String(child.error || ''));
-    const pid=Number(/supervisor PID (\d+)/.exec(child.stdout)?.[1]);
+    const pid=Number(/supervisor PID (\d+)/.exec(String(child.stdout))?.[1]);
     assert.ok(pid, child.stdout);
     return pid;
   };

@@ -38,7 +38,6 @@ const GetForegroundWindow = user32.func('void * __stdcall GetForegroundWindow()'
 const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(void *hWnd, void *lpString, int nMaxCount)');
 const GetModuleHandleW = kernel32.func('void * __stdcall GetModuleHandleW(void *lpModuleName)');
 const GetCurrentThreadId = kernel32.func('uint32 __stdcall GetCurrentThreadId()');
-const PostThreadMessageW = user32.func('bool __stdcall PostThreadMessageW(uint32 idThread, uint32 Msg, uintptr_t wParam, intptr_t lParam)');
 const MapVirtualKeyW = user32.func('uint32 __stdcall MapVirtualKeyW(uint32 uCode, uint32 uMapType)');
 const SetTimer = user32.func('uintptr_t __stdcall SetTimer(void *hWnd, uintptr_t nIDEvent, uint32 uElapse, void *lpTimerFunc)');
 const KillTimer = user32.func('bool __stdcall KillTimer(void *hWnd, uintptr_t uIDEvent)');

@@ -55,6 +55,7 @@ function repairElectron() {
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 function verify() {
+  /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
   delete env.ELECTRON_OVERRIDE_DIST_PATH;
   const expected=lock.packages['node_modules/electron'].version;
