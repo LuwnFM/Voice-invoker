@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const SPELLS = require('../spells');
-const { ACTION } = require('../logic');
+const { ACTION, createVoiceCast, vkOf } = require('../logic');
 const { decodeVoiceCommand } = require('../phrase-parser');
 const { NORMAL, getTiming, normalizeProfile, encodeCast, decodeCast, MAX_CAST_ID } = require('../timing-profiles');
 
@@ -119,3 +119,17 @@ test('after Invoke, changed hero state or disabled ability prevents slot input',
 });
 
 test('microphone loss drops queued casts',()=>{const h=harness();h.api.castByPhrase('a');h.api.castByPhrase('b');h.ctx.last.state.voiceReady=false;h.ack(h.requests[0]);h.advance(1000);h.api.pump();assert.equal(h.requests.length,1);h.api.castByPhrase('b');assert.equal(h.requests.length,1);});
+
+// Real PTT state changes wired into the queue harness: unlisten must not cancel.
+test('hold-to-talk release and re-press preserve a queued combo in every profile',()=>{
+ for(const profile of ['normal','fast','turbo']){
+  const h=harness();
+  const voice=createVoiceCast({keys:{quas:'Q',wex:'W',exort:'E',invoke:'R',slot1:'D',slot2:'F'},voiceChatKey:'G',listen:'hold',timingProfile:profile},{isGameActive:()=>true,emit:message=>{h.ctx.last=message;if(!message.state.enabled||!message.state.voiceReady)h.api.discardWaiting();},quit(){}});
+  voice.setVoiceReady(true);
+  voice.handleKey(vkOf('G'),true);h.api.castByPhrase('a');assert.equal(h.requests.length,1);
+  voice.handleKey(vkOf('G'),false);assert.equal(voice.state.listening,false);assert.equal(voice.state.enabled,true);
+  voice.handleKey(vkOf('G'),true);h.api.castByPhrase('b');voice.handleKey(vkOf('G'),false);
+  assert.equal(h.requests.length,1);h.ack(h.requests[0]);h.advance(100);h.api.pump();
+  assert.equal(h.requests.length,2);assert.equal(h.requests[1].profile,profile);assert.equal(voice.state.listening,false);
+ }
+});
