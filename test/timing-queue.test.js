@@ -98,3 +98,14 @@ test('existing slot is not reinvoked and no-GSI prepare is unconfirmed',()=>{
   assert.equal(h.requests.length,0);assert.equal(h.events.at(-1).event,'prepared');
   const g=harness(false,true);g.api.castByPhrase('запиши в фолиант b');assert.equal(g.requests[0].action,ACTION.PREPARE);g.ack(g.requests[0]);assert.equal(g.requests.length,1);assert.equal(g.events.at(-1).event,'prepare-unconfirmed');
 });
+
+test('voice preparation is integrated into every existing timing profile',()=>{
+  for(const profile of ['normal','fast','turbo']){
+    const h=harness(true,true);h.ctx.last.state.timingProfile=profile;
+    h.api.castByPhrase('готовь a');
+    assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,ACTION.PREPARE);assert.equal(h.requests[0].profile,profile);
+    h.ack(h.requests[0]);h.advance(50);
+    h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};
+    h.api.checkSlot();assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'prepared');
+  }
+});

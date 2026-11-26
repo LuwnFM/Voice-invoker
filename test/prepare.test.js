@@ -43,7 +43,7 @@ test('PREPARE sequence never presses a slot, clicks or Alt, for all spells and p
 test('all 143 default phrases remain casts and all 858 prefixed variants prepare',()=>{
   const fs = require('node:fs');
   const path = require('node:path');
-  const source = fs.readFileSync(path.join(__dirname,'..','main.js'),'utf8');
+  const source = fs.readFileSync(path.join(__dirname,'..','main.js'),'utf8').replace(/\r\n/g, '\n');
   const section = source.match(/  phrases: \{[\s\S]*?\n  \},\n  \/\/ Для отладки/)[0];
   const extra = require('../extra-phrases.json');
   const all = [...section.matchAll(/invoker_(\w+):\s*\[([\s\S]*?)\],/g)].flatMap(m=>[
