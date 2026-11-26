@@ -1,0 +1,5 @@
+node_modules/
+model/
+log.txt
+.dota-install.json
+.dota-install.json.tmp
