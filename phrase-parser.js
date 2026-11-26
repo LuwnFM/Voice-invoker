@@ -1,5 +1,5 @@
 (function (root) {
-  const PREPARE_PREFIXES = Object.freeze(['запиши в фолиант', 'записать в фолиант', 'подготовить', 'подготовь']);
+  const PREPARE_PREFIXES = Object.freeze(['запиши в фолиант', 'записать в фолиант', 'подготовить', 'подготовь', 'готовь', 'готовить']);
   const prefixTokens = PREPARE_PREFIXES.map(p => p.split(' '));
   const cueWords = new Set([...prefixTokens.map(p => p[0]), 'фолиант']);
   const wordsOf = text => String(text || '').toLowerCase().split(/\s+/).filter(w => w && w !== '[unk]');

@@ -5,8 +5,8 @@ const { createVoiceCast, ACTION } = require('../logic');
 const { NORMAL } = require('../timing-profiles');
 const spells = require('../spells');
 const phrases = ['торнадо','метеор','сан страйк','катаклизм','моржи'];
-test('exactly four accepted preparation prefixes, ordinary commands unchanged',()=>{
-  assert.deepEqual(PREPARE_PREFIXES,['запиши в фолиант','записать в фолиант','подготовить','подготовь']);
+test('exactly six accepted preparation prefixes, ordinary commands unchanged',()=>{
+  assert.deepEqual(PREPARE_PREFIXES,['запиши в фолиант','записать в фолиант','подготовить','подготовь','готовь','готовить']);
   const parse=createPhraseParser(phrases);
   for(const prefix of PREPARE_PREFIXES)for(const phrase of phrases) {
     assert.deepEqual(parse(prefix+' '+phrase),['подготовить '+phrase]);
@@ -36,5 +36,37 @@ test('PREPARE sequence never presses a slot, clicks or Alt, for all spells and p
     assert.equal(steps.length,4);
     assert.equal(steps.at(-1).vk,82);
     assert.ok(steps.every(s=>s.type==='key'&&[81,87,69,82].includes(s.vk)));
+  }
+});
+
+// Extract the same default phrases consumed by configurePhrases, not a hand-maintained sample.
+test('all 143 default phrases remain casts and all 858 prefixed variants prepare',()=>{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname,'..','main.js'),'utf8');
+  const section = source.match(/  phrases: \{[\s\S]*?\n  \},\n  \/\/ Для отладки/)[0];
+  const extra = require('../extra-phrases.json');
+  const all = [...section.matchAll(/invoker_(\w+):\s*\[([\s\S]*?)\],/g)].flatMap(m=>[
+    ...[...m[2].replace(/\/\/[^\n]*/g,'').matchAll(/'([^']+)'/g)].map(x=>x[1]),
+    ...extra[m[1]].ready,...extra[m[1]].pending
+  ]);
+  assert.equal(all.length,143);
+  assert.equal(new Set(all).size,143);
+  const parse=createPhraseParser(all);
+  const grammar=new Set(recognitionGrammar(all));
+  for(const phrase of all){
+    assert.deepEqual(parse(phrase),[phrase]);
+    for(const prefix of PREPARE_PREFIXES){
+      assert.ok(grammar.has(prefix+' '+phrase));
+      assert.deepEqual(parse(prefix+' '+phrase),['подготовить '+phrase]);
+    }
+  }
+  for(const prefix of PREPARE_PREFIXES){
+    assert.deepEqual(parse(prefix),[]);
+    const gate=createRecognitionGate(parse);
+    assert.deepEqual(gate.read(prefix,false),[]);
+    assert.deepEqual(gate.read('торнадо',false),[]);
+    assert.deepEqual(gate.read(prefix+' торнадо',true),['подготовить торнадо']);
+    gate.reset();assert.deepEqual(gate.read('когти торнаруса',false),['когти торнаруса']);
   }
 });
