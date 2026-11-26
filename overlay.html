@@ -436,6 +436,7 @@
       void el.offsetWidth;
       el.classList.add('show');
     }
+    if (event === 'item') toast(spell.name, '#6fbf45', 1800);
     if (event === 'prepared') toast('Подготовлено: ' + spell.name, '#6fbf45', 1800);
     if (event === 'prepare-unconfirmed') toast('Invoke отправлен: ' + spell.name + ' (нет GSI)', '#ff9a2e', 1800);
     if (event === 'refuse') {

@@ -4,7 +4,7 @@
 // поток выполняет их как последовательность нажатий с паузами (таймер WM_TIMER).
 const { parentPort, workerData } = require('worker_threads');
 const koffi = require('koffi');
-const SPELLS = require('./spells');
+const SPELLS = [...require('./spells'), ...require('./items').ITEM_SLOTS];
 const { createVoiceCast } = require('./logic');
 const { decodeCast } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST } = require('./messages');

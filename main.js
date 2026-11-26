@@ -22,6 +22,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
+const { ITEM_COMMAND, ITEM_SLOTS, planBlink } = require('./items');
+const { importBindings } = require('./dota-bindings');
 const { ACTION, vkOf } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
@@ -117,7 +119,9 @@ const RU_URL = `https://alphacephei.com/vosk/models/${RU_NAME}.zip`;
 let RU_PATH = path.join(MODEL_DIR, RU_NAME + '.tar.gz');
 const phraseToSpell = {};
 const skipped = [];
-const allPhrases = catalog(config.phrases, EXTRA_PHRASES);
+const allPhrases = catalog({...config.phrases,item_blink:['блинк','прыжок',...(config.phrases.item_blink||[])]}, EXTRA_PHRASES);
+// New item commands are opt-in. Existing installations retain all spell aliases.
+if (!Object.hasOwn(config.disabledPhrases||{},'item_blink')) config.disabledPhrases={...(config.disabledPhrases||{}),item_blink:allPhrases.item_blink};
 let modelInfo = { active: false, reason: 'initializing' }, experimental = null;
 let voiceInfo = {ready:false, message:''}, lastTest = null;
 const testOnly = config.testOnly === true;
@@ -127,7 +131,7 @@ function configurePhrases(useExpanded) {
   config.phrases = enabledPhrases(allPhrases, exclusions(config.disabledPhrases, allPhrases), EXTRA_PHRASES, useExpanded);
   const isRussian = (phrase) => /[а-яё]/i.test(phrase);
   // Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
-  for (const s of SPELLS) {
+  for (const s of [...SPELLS, ITEM_COMMAND]) {
     for (const p of config.phrases[s.id] || []) {
       if (isRussian(p)) phraseToSpell[p.toLowerCase()] = s.id;
       else skipped.push(p);
@@ -207,6 +211,7 @@ function handleGsi(data) {
     scepter: data.hero?.aghanims_scepter, // undefined, если игра не сообщает
     abilities,
     slots,
+    items: data.items ? Array.from({length:9},(_,i)=>data.items['slot'+i]||null) : null,
   };
   checkSlot();
   // Очередь могла ждать свежих данных об Invoke
@@ -224,6 +229,7 @@ function prediction() {
 
 // Решаем, что нажимать для способности: { action }, { refuse: причина } или { wait: true }
 function plan(spell, prepareOnly = false) {
+  if (spell.id === 'item_blink') return planBlink(gsi,config,prepareOnly);
   const fresh = gsi && Date.now() - gsi.at < 5000 && gsi.hero;
   if (!fresh) {
     if (!gsiWarned) log('Нет данных от Dota (GSI) — кастую вслепую: сферы + Invoke + слот 1');
@@ -273,7 +279,7 @@ function dispatchCast(spell, action, profile) {
   if (activeCast) return false;
   castRequestId = castRequestId % MAX_CAST_ID + 1;
   const id = castRequestId;
-  if (!toHook(WM_APP_CAST, SPELLS.indexOf(spell) + 1, encodeCast(action, profile, id))) return false;
+  if (!toHook(WM_APP_CAST, (spell.itemSlot ? SPELLS.length + spell.itemSlot : SPELLS.indexOf(spell) + 1), encodeCast(action, profile, id))) return false;
   activeCast = { id, spell, action, profile, timedOut: false };
   const timing = getTiming(config, profile);
   // Fail closed if the worker stops responding; do not send another series until it replies.
@@ -328,7 +334,7 @@ function discardWaiting() {
 
 function castByPhrase(command) {
   const { phrase, prepareOnly } = decodeVoiceCommand(command);
-  const spell = SPELLS.find((s) => s.id === phraseToSpell[phrase]);
+  const spell = phraseToSpell[phrase] === 'item_blink' ? ITEM_COMMAND : SPELLS.find((s) => s.id === phraseToSpell[phrase]);
   if (!spell) return;
   if (!last || !last.state.enabled || activeCast?.timedOut) return;
   // Одну и ту же фразу могут услышать обе модели — второй раз не кастуем
@@ -375,6 +381,12 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
   if (p.refuse) {
     log(`"${phrase}" -> отказ: ${p.refuse}`);
     return broadcast({ ...last, event: 'refuse', spell, reason: p.refuse });
+  }
+  if (p.itemSlot) {
+    const item=ITEM_SLOTS[p.itemSlot-1];
+    if(!dispatchCast(item,p.action,profile))return cast(spell,phrase,{refuse:'Поток ввода недоступен'});
+    log('Blink Dagger: слот',p.itemSlot);
+    return broadcast({...last,event:'item',spell:item});
   }
   if (prepareOnly) {
     if (p.prepared) return notifyPrepared(spell, true);
@@ -495,6 +507,7 @@ function sendFile(res, file, type) {
 
 // ---------- Настройки клавиш (окно settings.html пишет в config.json) ----------
 const KEY_NAMES = ['quas', 'wex', 'exort', 'invoke', 'slot1', 'slot2'];
+const ITEM_KEYS=Array.from({length:6},(_,i)=>'item'+(i+1));
 const okKey = (k) => typeof k === 'string' && vkOf(k) > 0;
 
 function settingsData() {
@@ -506,7 +519,8 @@ function settingsData() {
     blockKeys: config.blockKeys || [],
     microphone: config.microphone || '',
     phraseCatalog: allPhrases,
-    disabledPhrases: exclusions(userConfig.disabledPhrases, allPhrases),
+    disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, allPhrases),
+    itemCastModes: userConfig.itemCastModes||{},
     experimentalFrames: userConfig.experimentalFrames === true,
     testOnly: userConfig.testOnly === true,
     slotCastModes: userConfig.slotCastModes || {},
@@ -519,6 +533,7 @@ function saveSettings(body) {
   const out = { ...userConfig };
   const keys = {};
   for (const n of KEY_NAMES) if (okKey(body.keys?.[n])) keys[n] = body.keys[n].toUpperCase();
+  for (const n of ITEM_KEYS) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
   out.keys = { ...config.keys, ...keys };
   if (okKey(body.voiceChatKey)) out.voiceChatKey = body.voiceChatKey.toUpperCase();
   if (['click', 'quickcast'].includes(body.castMode)) out.castMode = body.castMode;
@@ -528,7 +543,8 @@ function saveSettings(body) {
   if (body.disabledPhrases !== undefined) out.disabledPhrases = exclusions(body.disabledPhrases, allPhrases);
   if (typeof body.experimentalFrames === 'boolean') out.experimentalFrames = body.experimentalFrames;
   if (typeof body.testOnly === 'boolean') out.testOnly = body.testOnly;
-  if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2'].includes(k)&&['click','quickcast'].includes(v)));
+  if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v)));
+  if (body.itemCastModes&&typeof body.itemCastModes==='object') out.itemCastModes=Object.fromEntries(Object.entries(body.itemCastModes).filter(([k,v])=>['item_blink','item_overwhelming_blink','item_swift_blink','item_arcane_blink'].includes(k)&&['click','quickcast'].includes(v)));
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n');
   userConfig = out;
   log('Настройки сохранены в config.json');
@@ -586,6 +602,10 @@ const server = http.createServer(async (req, res) => {
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
   if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
   if (p === '/settings') return sendFile(res, path.join(__dirname, 'settings.html'), 'text/html; charset=utf-8');
+  if (p === '/import-bindings' && req.method === 'POST' && String(req.headers['content-type']||'').startsWith('application/json')) {
+    res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
+    try {return res.end(JSON.stringify({ok:true,...importBindings()}));} catch(e){return res.end(JSON.stringify({ok:false,error:String(e.message).slice(0,180)}));}
+  }
   if (p === '/diagnostics' && req.method === 'GET') {
     res.writeHead(200, {'Content-Type':'application/json','Cache-Control':'no-store'});
     return res.end(JSON.stringify(diagnostics()));

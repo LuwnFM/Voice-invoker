@@ -133,6 +133,13 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
   function buildSequence(spell, action, profile = s.timingProfile) {
     const timing = getTiming(config, profile);
     const steps = [];
+    if(spell.itemSlot){
+      const vk=vkOf(config.keys?.['item'+spell.itemSlot]);
+      if(!vk||![ACTION.SLOT1,ACTION.SLOT2].includes(action))throw Error('Invalid item slot');
+      steps.push({type:'key',vk,wait:0});
+      if(action===ACTION.SLOT1)steps.push({type:'click',wait:timing.clickDelayMs});
+      return steps;
+    }
     const key = (k, wait) => steps.push({ type: 'key', vk: vkOf(k), wait });
     const gap = timing.keyDelayMs;
 
