@@ -20,14 +20,15 @@ test('profiles preserve input order and all eleven combinations', () => {
   assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE,'normal')),255);
   assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE,'fast')),180);
   assert.equal(waits(v.buildSequence(spell,ACTION.PREPARE,'fast')),60);
-  assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE,'turbo')),140);
+  assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE,'turbo')),130);
+  assert.equal(waits(v.buildSequence(spell,ACTION.SLOT1,'turbo')),10);
   assert.equal(waits(v.buildSequence(spell,ACTION.PREPARE,'turbo')),30);
   const quick = build({...config,castMode:'quickcast'});
   assert.equal(waits(quick.buildSequence(spell,ACTION.INVOKE,'turbo')),120);
   const cat=spells.find(s=>s.name==='Cataclysm');
   assert.deepEqual(v.buildSequence(cat,ACTION.SLOT1,'fast').map(s=>s.type),['down','key','up']);
   assert.equal(waits(v.buildSequence(cat,ACTION.SLOT1,'fast')),40);
-  assert.equal(waits(v.buildSequence(cat,ACTION.SLOT1,'turbo')),40);
+  assert.equal(waits(v.buildSequence(cat,ACTION.SLOT1,'turbo')),20);
 });
 test('hotkeys select and enable profiles; existing sequence and explicit snapshot stay unchanged', () => {
   const events=[],v=build(config,m=>events.push(m));
@@ -44,7 +45,7 @@ test('hotkeys select and enable profiles; existing sequence and explicit snapsho
   assert.equal(v.handleKey(vkOf('F12'),true),true);
   assert.equal(v.state.timingProfile,'turbo');
   assert.equal(v.handleKey(vkOf('F12'),false),true);
-  assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE)),140);
+  assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE)),130);
   v.handleKey(vkOf('F7'),true);v.handleKey(vkOf('F7'),false);
   assert.equal(v.state.enabled,false);
   v.handleKey(vkOf('F10'),true);v.handleKey(vkOf('F10'),false);
@@ -61,5 +62,11 @@ test('custom normal delays and profile request protocol', () => {
   assert.throws(()=>decodeCast(32+24+1));
   assert.throws(()=>encodeCast(1,'turbo',MAX_CAST_ID+1));
   assert.equal(getTiming(config,'turbo').castDelayMs,90);
+  assert.equal(getTiming(config,'turbo').clickDelayMs,10);
+  assert.equal(getTiming(config,'turbo').altDelayMs,10);
+  assert.equal(getTiming(config,'normal').clickDelayMs,60);
+  assert.equal(getTiming(config,'normal').altDelayMs,30);
+  assert.equal(getTiming(config,'fast').clickDelayMs,30);
+  assert.equal(getTiming(config,'fast').altDelayMs,20);
   assert.equal(getTiming({...config,keyDelayMs:8},'turbo').keyDelayMs,8);
 });

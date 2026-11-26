@@ -1,8 +1,8 @@
 // Normal preserves existing custom delays. Fast and turbo are opt-in.
 const NORMAL = Object.freeze({ keyDelayMs: 35, castDelayMs: 90, clickDelayMs: 60, altDelayMs: 30, chainGapMs: 40 });
 const FAST = Object.freeze({ keyDelayMs: 20, castDelayMs: 90, clickDelayMs: 30, altDelayMs: 20, chainGapMs: 20 });
-// SetTimer clamps positive intervals below 10 ms. Keep a margin for targeting and Alt.
-const TURBO = Object.freeze({ keyDelayMs: 10, castDelayMs: 90, clickDelayMs: 20, altDelayMs: 20, chainGapMs: 10 });
+// Experimental Turbo: SetTimer clamps positive intervals below 10 ms.
+const TURBO = Object.freeze({ keyDelayMs: 10, castDelayMs: 90, clickDelayMs: 10, altDelayMs: 10, chainGapMs: 10 });
 const PROFILES = Object.freeze(['normal', 'fast', 'turbo']);
 const MAX_CAST_ID = 0x3ffffff;
 function normalizeProfile(value) { return PROFILES.includes(value) ? value : 'normal'; }
