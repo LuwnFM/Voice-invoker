@@ -18,10 +18,6 @@ test('profiles preserve input order and all eleven combinations', () => {
   }
   const spell=spells.find(s=>s.name==='Cold Snap');
   assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE,'normal')),255);
-  assert.equal(v.handleKey(vkOf('F12'),true),true);
-  assert.equal(v.state.timingProfile,'turbo');
-  assert.equal(v.handleKey(vkOf('F12'),false),true);
-  assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE)),140);
   assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE,'fast')),180);
   assert.equal(waits(v.buildSequence(spell,ACTION.PREPARE,'fast')),60);
   assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE,'turbo')),140);
@@ -45,6 +41,10 @@ test('hotkeys select and enable profiles; existing sequence and explicit snapsho
   assert.equal(waits(old),255);
   assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE)),180);
   assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE,'normal')),255);
+  assert.equal(v.handleKey(vkOf('F12'),true),true);
+  assert.equal(v.state.timingProfile,'turbo');
+  assert.equal(v.handleKey(vkOf('F12'),false),true);
+  assert.equal(waits(v.buildSequence(spell,ACTION.INVOKE)),140);
   v.handleKey(vkOf('F7'),true);v.handleKey(vkOf('F7'),false);
   assert.equal(v.state.enabled,false);
   v.handleKey(vkOf('F10'),true);v.handleKey(vkOf('F10'),false);
