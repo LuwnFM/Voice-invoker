@@ -438,6 +438,9 @@
       toast('Только голосом!', '#e0463a', 1200);
       keyClick({ vol: 0.18, tone: 0.6 });
     }
+    if (event === 'profile') {
+      toast(s.timingProfile === 'fast' ? 'Ускоренный режим' : 'Обычный режим', s.timingProfile === 'fast' ? '#ff9a2e' : '#6fbf45', 1800);
+    }
     if (event === 'toggle') {
       toast(s.enabled ? 'Голосовой каст ВКЛ' : 'Голосовой каст ВЫКЛ', s.enabled ? '#6fbf45' : '#7d8a94');
       keyClick({ vol: 0.22, tone: s.enabled ? 1.1 : 0.8 });

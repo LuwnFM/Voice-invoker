@@ -1,7 +1,7 @@
 name: RC checks
 on:
   push:
-    branches: [main, voice-dictionary-setup, rc2-model-download]
+    branches: [main, voice-dictionary-setup, rc2-model-download, timing-profiles]
   pull_request:
     branches: [main]
   workflow_dispatch:
