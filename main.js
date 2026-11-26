@@ -92,35 +92,32 @@ try {
 // Клавиши ещё ни разу не настраивались — при запуске откроем окно настроек
 const firstRun = !userConfig.keys;
 
-// Activate the expanded phrases only with the verified V2 archive.
-const { selectExpandedModel } = require('./model-selection');
-const modelSelection = selectExpandedModel(path.join(__dirname, 'model'), userConfig.expandedVocabulary);
-const expandedModel = modelSelection.file;
-const useExpanded = modelSelection.active;
-for (const [suffix, extra] of Object.entries(EXTRA_PHRASES)) {
-  const id = 'invoker_' + suffix;
-  config.phrases[id] = [...new Set([...(config.phrases[id] || []), ...extra.ready, ...(useExpanded ? extra.pending : [])])];
-  // These short aliases were retired; also remove them from older saved configurations.
-  const retired = suffix === 'sun_strike' ? ['сан'] : suffix === 'cataclysm' ? ['ката', 'катак'] : [];
-  config.phrases[id] = config.phrases[id].filter((phrase) => !retired.includes(phrase.trim().toLowerCase()));
-}
-
-const isRussian = (phrase) => /[а-яё]/i.test(phrase);
-// Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
-const phraseToSpell = {};
-const skipped = [];
-for (const s of SPELLS) {
-  for (const p of config.phrases[s.id] || []) {
-    if (isRussian(p)) phraseToSpell[p.toLowerCase()] = s.id;
-    else skipped.push(p);
-  }
-}
-
+const { prepareExpandedModel } = require('./model-selection');
 const MODEL_DIR = path.join(__dirname, 'model');
-// Русская модель раздаётся архивом .zip, а библиотеке нужен .tar.gz — перепаковываем
 const RU_NAME = 'vosk-model-small-ru-0.22';
 const RU_URL = `https://alphacephei.com/vosk/models/${RU_NAME}.zip`;
-const RU_PATH = useExpanded ? expandedModel : path.join(MODEL_DIR, RU_NAME + '.tar.gz');
+let RU_PATH = path.join(MODEL_DIR, RU_NAME + '.tar.gz');
+const phraseToSpell = {};
+const skipped = [];
+
+// Build the command set only after the local/downloaded model has been selected.
+function configurePhrases(useExpanded) {
+  for (const [suffix, extra] of Object.entries(EXTRA_PHRASES)) {
+    const id = 'invoker_' + suffix;
+    config.phrases[id] = [...new Set([...(config.phrases[id] || []), ...extra.ready, ...(useExpanded ? extra.pending : [])])];
+    // These short aliases were retired; also remove them from older saved configurations.
+    const retired = suffix === 'sun_strike' ? ['сан'] : suffix === 'cataclysm' ? ['ката', 'катак'] : [];
+    config.phrases[id] = config.phrases[id].filter((phrase) => !retired.includes(phrase.trim().toLowerCase()) && (useExpanded || !extra.pending.includes(phrase.trim().toLowerCase())));
+  }
+  const isRussian = (phrase) => /[а-яё]/i.test(phrase);
+  // Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
+  for (const s of SPELLS) {
+    for (const p of config.phrases[s.id] || []) {
+      if (isRussian(p)) phraseToSpell[p.toLowerCase()] = s.id;
+      else skipped.push(p);
+    }
+  }
+}
 
 // Лог идёт в консоль и в файл log.txt (перезаписывается при каждом запуске)
 const LOG_FILE = path.join(__dirname, 'log.txt');
@@ -576,7 +573,10 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   try {
-    log('Vosk:', useExpanded ? 'Invoker V2 (SHA-256 OK)' : 'stock ru-0.22; expanded model: ' + modelSelection.reason);
+    const modelSelection = await prepareExpandedModel(MODEL_DIR, userConfig.expandedVocabulary, { log });
+    if (modelSelection.active) RU_PATH = modelSelection.file;
+    configurePhrases(modelSelection.active);
+    log('Vosk:', modelSelection.active ? 'Invoker V2 (SHA-256 OK)' : 'stock ru-0.22; expanded model: ' + modelSelection.reason);
     await ensureModel();
   } catch (e) {
     log('Не удалось подготовить модель распознавания, голос работать не будет:', e.message);
