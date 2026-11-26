@@ -45,7 +45,7 @@ const config = {
   // быть в словаре модели: если слова нет, при запуске в консоли будет предупреждение —
   // подбери похожее по звучанию.
   phrases: {
-    // Слов «снэп», «алакрити», «дефенинг», «форж» в словаре нет — они записаны похожими по звучанию.
+    // Исторические варианты для исходной модели сохранены; точные названия добавляет V2.
     // Реплики Инвокера: имена собственные (Садрон, Корикс, Шимарэ, Торнарус, Харлек...) и редкие
     // слова тоже разбиты на похожие слова из словаря («сад рона», «торна руса», «хар лека»).
     invoker_cold_snap: ['колд с нэп', 'колд', 'холод', 'заморозка',
@@ -92,9 +92,11 @@ try {
 // Клавиши ещё ни разу не настраивались — при запуске откроем окно настроек
 const firstRun = !userConfig.keys;
 
-// Activate new words only with a separately rebuilt and tested graph.
-const expandedModel = path.join(__dirname, 'model', 'vosk-model-small-ru-invoker.tar.gz');
-const useExpanded = userConfig.expandedVocabulary === true && fs.existsSync(expandedModel);
+// Activate the expanded phrases only with the verified V2 archive.
+const { selectExpandedModel } = require('./model-selection');
+const modelSelection = selectExpandedModel(path.join(__dirname, 'model'), userConfig.expandedVocabulary);
+const expandedModel = modelSelection.file;
+const useExpanded = modelSelection.active;
 for (const [suffix, extra] of Object.entries(EXTRA_PHRASES)) {
   const id = 'invoker_' + suffix;
   config.phrases[id] = [...new Set([...(config.phrases[id] || []), ...extra.ready, ...(useExpanded ? extra.pending : [])])];
@@ -456,7 +458,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (p === '/' || p === '/overlay.html') return sendFile(res, path.join(__dirname, 'overlay.html'), 'text/html; charset=utf-8');
-  if (p === '/sounds/keys.wav') return sendFile(res, path.join(__dirname, 'sounds', 'keys.wav'), 'audio/wav');
+  if (p === '/sounds/keys.wav') return sendFile(res, path.join(__dirname, 'keys.wav'), 'audio/wav');
   if (p === '/vosk.js') return sendFile(res, require.resolve('vosk-browser/dist/vosk.js'), 'text/javascript');
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
   if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
@@ -574,6 +576,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   try {
+    log('Vosk:', useExpanded ? 'Invoker V2 (SHA-256 OK)' : 'stock ru-0.22; expanded model: ' + modelSelection.reason);
     await ensureModel();
   } catch (e) {
     log('Не удалось подготовить модель распознавания, голос работать не будет:', e.message);
