@@ -24,7 +24,7 @@ const koffi = require('koffi');
 const SPELLS = require('./spells');
 const { ITEM_KEYS, ITEM_SLOTS, readInventory, planItem } = require('./items');
 const { readModelWords } = require('./model-words');
-const { validateItemPhrases } = require('./item-phrases');
+const { resolveCommands } = require('./custom-commands');
 const { importBindings } = require('./dota-bindings');
 const { processStatus } = require('./diagnostics');
 const { ACTION, vkOf } = require('./logic');
@@ -99,7 +99,7 @@ const config = {
   debugSteps: false,
 };
 const EXTRA_PHRASES = require('./extra-phrases.json');
-const { catalog, exclusions, enabledPhrases } = require('./phrase-preferences');
+const { catalog, exclusions, mergeCatalog } = require('./phrase-preferences');
 const { experimentalModel } = require('./experimental-model');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 let userConfig = {};
@@ -107,7 +107,7 @@ try {
   userConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
   Object.assign(config, userConfig, {
     keys: { ...config.keys, ...(userConfig.keys || {}) },
-    phrases: { ...config.phrases, ...(userConfig.phrases || {}) },
+    phrases: mergeCatalog(config.phrases,userConfig.phrases),
   });
 } catch (e) {
   if (e.code !== 'ENOENT') console.error('config.json не прочитан:', e.message);
@@ -130,16 +130,13 @@ const testOnly = config.testOnly === true;
 
 // Build the command set only after the local/downloaded model has been selected.
 function configurePhrases(useExpanded) {
-  config.phrases = enabledPhrases(allPhrases, exclusions(config.disabledPhrases, allPhrases), EXTRA_PHRASES, useExpanded);
+  const commands=resolveCommands(allPhrases,EXTRA_PHRASES,config,modelWords,useExpanded,{strict:false});
+  config.phrases=commands.active;
   const isRussian = (phrase) => /[а-яё]/i.test(phrase);
-  // Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
-  const reserved=enabledPhrases(allPhrases,exclusions(config.disabledPhrases,allPhrases),EXTRA_PHRASES,true);
-  const custom=validateItemPhrases(config.itemPhrases,modelWords,reserved,{strict:false});
-  if(custom.errors.length)log('Пропущенные фразы предметов:',custom.errors.join('; '));
-  Object.assign(config.phrases,custom.phrases);
+  if(commands.errors.length)log('Пропущенные пользовательские фразы:',commands.errors.join('; '));
   for (const s of [...SPELLS, ...ITEM_SLOTS]) {
     for (const p of config.phrases[s.id] || []) {
-      if (isRussian(p) || s.itemSlot) phraseToSpell[p.toLowerCase()] = s.id;
+      if (isRussian(p) || s.itemSlot || commands.customSpellPhrases[s.id]?.includes(p)) phraseToSpell[p.toLowerCase()] = s.id;
       else skipped.push(p);
     }
   }
@@ -525,7 +522,8 @@ function settingsData() {
     blockKeys: config.blockKeys || [],
     microphone: config.microphone || '',
     phraseCatalog: allPhrases,
-    disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, allPhrases),
+    customSpellPhrases: userConfig.customSpellPhrases||{},
+    disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, mergeCatalog(allPhrases,userConfig.customSpellPhrases)),
     itemPhrases: userConfig.itemPhrases||{},
     dictionaryReady: !!modelWords,
     itemSlots: ITEM_SLOTS.map(({id,name,key})=>({id,name,key})),
@@ -549,13 +547,17 @@ function saveSettings(body) {
   if (['hold', 'always'].includes(body.listen)) out.listen = body.listen;
   if (typeof body.microphone === 'string') out.microphone = body.microphone.slice(0, 200);
   if (Array.isArray(body.blockKeys)) out.blockKeys = body.blockKeys.filter((n) => KEY_NAMES.includes(n));
-  if (body.disabledPhrases !== undefined) out.disabledPhrases = exclusions(body.disabledPhrases, allPhrases);
+  if (body.disabledPhrases !== undefined) out.disabledPhrases = body.disabledPhrases;
+  if (body.customSpellPhrases !== undefined) out.customSpellPhrases = body.customSpellPhrases;
   if (typeof body.experimentalFrames === 'boolean') out.experimentalFrames = body.experimentalFrames;
   if (typeof body.testOnly === 'boolean') out.testOnly = body.testOnly;
   if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v)));
-  // Check the proposed configuration as a whole; disabled spell aliases can be reused.
-  const reserved=enabledPhrases(allPhrases,exclusions(out.disabledPhrases,allPhrases),EXTRA_PHRASES,true);
-  if(body.itemPhrases!==undefined || out.itemPhrases!==undefined)out.itemPhrases=validateItemPhrases(body.itemPhrases??out.itemPhrases,modelWords,reserved).phrases;
+  // Validate spell and item preferences together before writing anything.
+  if(body.itemPhrases!==undefined)out.itemPhrases=body.itemPhrases;
+  const commands=resolveCommands(allPhrases,EXTRA_PHRASES,out,modelWords,modelInfo.active);
+  out.customSpellPhrases=commands.customSpellPhrases;
+  out.itemPhrases=commands.itemPhrases;
+  out.disabledPhrases=commands.disabledPhrases;
   delete out.itemCastModes;
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n');
   userConfig = out;

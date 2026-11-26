@@ -122,11 +122,12 @@
 </div>
 
 <h2>Голосовые фразы</h2>
-<p class="hint">Выбирай только нужные фразы. Снятая галочка исключает фразу из грамматики после перезапуска. Включение всех восстанавливает исходный список. Распознавание похожих слов всё равно может ошибаться.</p>
+<p class="hint">Выбирай только нужные фразы. Снятая галочка исключает фразу из грамматики после перезапуска. Встроенные фразы нельзя удалить, только отключить. Добавляй свои слова и фразы из словаря модели. Пользовательские фразы можно отключить или удалить. Распознавание похожих слов всё равно может ошибаться.</p>
+<div class="actions"><input id="wordSearch" class="control" placeholder="Поиск слова в словаре"><button id="wordFind">Найти слова</button></div><p id="wordResults" class="hint" style="user-select:text"></p>
 <div id="phrases"></div>
 <h2>Фразы для слотов предметов</h2>
 <p class="hint">Введи любое слово или фразу из словаря модели, по одной на строку. Пустой список отключает голосовой слот. Фразы отключённых способностей можно использовать здесь; одинаковые активные команды не допускаются. Команда применяет предмет, который находится в этом слоте сейчас. Без свежего GSI предметы не применяются.</p>
-<div class="actions"><input id="wordSearch" class="control" placeholder="Поиск слова в словаре"><button id="wordFind">Найти слова</button></div><p id="wordResults" class="hint" style="user-select:text"></p><div id="itemPhrases"></div>
+<div id="itemPhrases"></div>
 <h2>Дополнительно</h2>
 <div class="opts"><label><input id="experimentalFrames" type="checkbox"> Экспериментально: frames-per-chunk=3 (выключено по умолчанию)</label>
 <label><input id="testOnly" type="checkbox"> Тест распознавания без нажатий (после перезапуска)</label></div>
@@ -313,15 +314,32 @@
       const details=document.createElement('details'), summary=document.createElement('summary'), list=document.createElement('div'), actions=document.createElement('div');
       list.className='phrase-list';actions.className='actions';
       const disabled=new Set(c.disabledPhrases?.[id]||[]),boxes=[];
-      const update=()=>summary.textContent=(spellNames[id.replace(/^(invoker_|item_)/,'')]||id)+' — '+boxes.filter(x=>x.checked).length+'/'+boxes.length+(boxes.some(x=>x.checked)?'':' · отключено');
-      for(const phrase of phrases){
+      const update=()=>summary.textContent=(spellNames[id.replace(/^invoker_/,'')]||id)+' — '+boxes.filter(x=>x.checked).length+'/'+boxes.length+(boxes.some(x=>x.checked)?'':' · отключено');
+      const normalize=p=>p.trim().toLowerCase().replace(/\s+/g,' ');
+      function addPhrase(phrase,custom=false){
         const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.checked=!disabled.has(phrase);box.dataset.spell=id;box.dataset.phrase=phrase;
-        box.addEventListener('change',update);boxes.push(box);label.append(box,document.createTextNode(phrase));list.append(label);
+        box.addEventListener('change',update);boxes.push(box);label.append(box,document.createTextNode(phrase));
+        if(custom){
+          box.dataset.custom='1';const remove=document.createElement('button');remove.type='button';remove.className='control';remove.textContent='×';remove.title='Удалить свою фразу';
+          remove.onclick=e=>{e.preventDefault();boxes.splice(boxes.indexOf(box),1);label.remove();update();status('Есть несохранённые изменения');};label.append(remove);
+        }
+        list.append(label);
       }
+      for(const phrase of phrases)addPhrase(phrase);
+      for(const phrase of c.customSpellPhrases?.[id]||[]){if(typeof phrase==='string'&&!boxes.some(b=>b.dataset.phrase===normalize(phrase)))addPhrase(normalize(phrase),true);}
       for(const [name,on] of [['Включить все',true],['Отключить все',false]]) {
         const button=document.createElement('button');button.textContent=name;button.onclick=()=>{boxes.forEach(b=>b.checked=on);update();status('Есть несохранённые изменения');};actions.append(button);
       }
-      update();details.append(summary,actions,list);host.append(details);
+      const addRow=document.createElement('div'),input=document.createElement('input'),add=document.createElement('button');
+      addRow.className='actions';input.className='control';input.placeholder='Новая фраза';input.maxLength=120;input.style.flex='1';add.textContent='Добавить фразу';add.disabled=!c.dictionaryReady;
+      const submit=()=>{
+        const phrase=normalize(input.value);
+        if(!phrase)return;
+        if(boxes.some(b=>b.dataset.phrase===phrase)){status('Фраза уже есть в списке','bad');return;}
+        addPhrase(phrase,true);boxes.at(-1).checked=true;input.value='';update();status('Есть несохранённые изменения. Словарь проверяется при сохранении.');
+      };
+      add.onclick=submit;input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();if(!add.disabled)submit();}};
+      addRow.append(input,add);update();details.append(summary,actions,list,addRow);host.append(details);
     }
   }
   function selectedExclusions(){
@@ -364,6 +382,7 @@
     return {
       keys: state.keys,
       disabledPhrases: selectedExclusions(),
+      customSpellPhrases: Object.fromEntries(Object.entries(spellNames).map(([suffix])=>{const id='invoker_'+suffix;return [id,[...document.querySelectorAll('#phrases input[data-custom="1"][data-spell="'+id+'"]')].map(b=>b.dataset.phrase)];})),
       experimentalFrames: $('#experimentalFrames').checked,
       testOnly: $('#testOnly').checked,
       slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value,...Object.fromEntries([...document.querySelectorAll('[data-item-mode]')].map(e=>[e.dataset.itemMode,e.value]))},
@@ -385,7 +404,7 @@
   }
 
   $('#save').onclick = async () => {
-    try { await save(); status('Сохранено. Новые клавиши заработают после перезапуска.', 'ok'); }
+    try { await save(); status('Сохранено. Новые клавиши и фразы заработают после перезапуска.', 'ok'); }
     catch (e) { status('Не сохранилось: ' + e.message, 'bad'); }
   };
   $('#restart').onclick = async () => {

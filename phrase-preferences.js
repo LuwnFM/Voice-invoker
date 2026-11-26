@@ -24,4 +24,10 @@ function enabledPhrases(all, excluded, extra, expanded) {
     return [id,phrases.filter(p=>!denied.has(p)&&(expanded||!pending.includes(p)))];
   }));
 }
-module.exports={catalog,exclusions,enabledPhrases};
+// Historical manually edited config.phrases is additive, not a replacement of defaults.
+function mergeCatalog(base, additions) {
+  return Object.fromEntries(Object.entries(base).map(([id,list])=>[
+    id,[...new Set([...list,...(Array.isArray(additions?.[id])?additions[id].filter(p=>typeof p==='string'):[])].map(normalize).filter(Boolean))]
+  ]));
+}
+module.exports={catalog,exclusions,enabledPhrases,mergeCatalog};

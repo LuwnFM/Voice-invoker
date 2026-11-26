@@ -59,7 +59,7 @@ async function ready(previous=0) {
   // Disabled aliases must disappear from the live grammar after restart.
   const preferences=await (await fetch(base+'/config')).json();
   const disabled={...preferences.disabledPhrases,invoker_emp:preferences.phraseCatalog.invoker_emp};
-  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,itemPhrases:{item_slot_item1:['прыжок','эмп'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
+  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,customSpellPhrases:{invoker_tornado:['ураган','буря']},itemPhrases:{item_slot_item1:['прыжок','эмп'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
   assert.equal(saved.status,200);
   const r=await fetch(base+'/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   assert.equal(r.status,204);
@@ -70,7 +70,11 @@ async function ready(previous=0) {
   const grammar=await (await fetch(base+'/grammar')).json();
   assert.ok(preferences.phraseCatalog.invoker_emp.filter(p=>p!=='эмп').every(p=>!grammar.includes(p)));
   assert.ok(grammar.includes('эмп'),'Disabled EMP alias reused for item');
-  for(const p of ['прыжок','щит','телепорт'])assert.ok(grammar.includes(p),'Missing custom phrase '+p);
+  for(const p of ['прыжок','щит','телепорт','ураган','буря'])assert.ok(grammar.includes(p),'Missing custom phrase '+p);
+  assert.ok(preferences.phraseCatalog.invoker_tornado.every(p=>grammar.includes(p)),'Built-in Tornado aliases lost');
+  const updated=await (await fetch(base+'/config')).json();assert.deepEqual(updated.customSpellPhrases.invoker_tornado,['ураган','буря']);
+  const duplicateAlias=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customSpellPhrases:{invoker_tornado:['прыжок']}})});
+  assert.equal(duplicateAlias.status,500,'Spell/item duplicate accepted');
   const conflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:{...disabled,invoker_emp:[]}})});
   assert.equal(conflict.status,500,'Re-enabling conflicting alias must be rejected');
   const diag=await (await fetch(base+'/diagnostics')).json();assert.equal(diag.testOnly,true);
