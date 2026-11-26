@@ -1,7 +1,7 @@
 name: RC checks
 on:
   push:
-    branches: [main, voice-dictionary-setup]
+    branches: [main, voice-dictionary-setup, rc2-model-download]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -38,6 +38,15 @@ jobs:
       - name: Check installed dependencies
         run: npm ls --depth=0
 
+      - name: Download and verify the actual V2 archive
+        run: node scripts/fetch-model.js model
+      - uses: actions/upload-artifact@v4
+        with:
+          name: invoker-v2
+          path: model/vosk-model-small-ru-invoker.tar.gz
+          if-no-files-found: error
+          retention-days: 2
+
   publish-rc:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: windows
@@ -46,16 +55,25 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Publish source release candidate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: invoker-v2
+          path: model
+      - name: Verify release model
+        run: node scripts/fetch-model.js model
+      - name: Publish release candidate with model
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           tag="v$(node -p "require('./package.json').version")"
-          if [[ "$tag" != "v1.1.0-rc.1" ]]; then exit 0; fi
+          if [[ "$tag" != "v1.1.0-rc.2" ]]; then exit 0; fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $tag already exists; not overwriting."
             exit 0
           fi
-          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.1" --notes-file RELEASE_NOTES.md
+          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.2" --notes-file RELEASE_NOTES.md
