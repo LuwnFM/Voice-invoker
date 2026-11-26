@@ -12,7 +12,7 @@ const SPELLS = require('./spells');
 const { ACTION, vkOf } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
-const { WM_APP_VOICE_READY, WM_APP_CAST } = require('./messages');
+const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT } = require('./messages');
 
 const config = {
   port: 3055,
@@ -162,8 +162,11 @@ async function ensureModel() {
 const user32 = koffi.load('user32.dll');
 const PostThreadMessageW = user32.func('bool __stdcall PostThreadMessageW(uint32 idThread, uint32 Msg, uintptr_t wParam, intptr_t lParam)');
 let hookThreadId = 0;
+let hookWorker = null;
+let shutdown = null;
+let exiting = false;
 let voiceReady = false;
-const toHook = (msg, wParam, lParam = 0) => hookThreadId && PostThreadMessageW(hookThreadId, msg, wParam, lParam);
+const toHook = (msg, wParam, lParam = 0) => (!shutdown || msg === WM_APP_QUIT) && hookThreadId && PostThreadMessageW(hookThreadId, msg, wParam, lParam);
 
 // ---------- Состояние игры из Dota GSI ----------
 let gsi = null; // { at, hero, abilities: { name: {cooldown, can_cast, level} }, slots: [name, name] }
@@ -559,8 +562,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/restart') {
       done();
       log('Перезапуск с новыми настройками...');
-      app.relaunch();
-      return setTimeout(() => app.exit(0), 200);
+      return requestShutdown(true);
     }
     try {
       saveSettings(await readJson(req));
@@ -582,6 +584,7 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify(Object.keys(phraseToSpell)));
   }
   if (req.method === 'POST' && p === '/voice') {
+    if (shutdown) return done();
     const { text, texts } = await readJson(req);
     for (const t of Array.isArray(texts) ? texts : [text]) castByPhrase(String(t || '').trim().toLowerCase());
     return done();
@@ -600,9 +603,14 @@ setInterval(() => clients.forEach((res) => res.write(': ping\n\n')), 15000);
 
 // ---------- Хук клавиатуры ----------
 function startWorker() {
-  const worker = new Worker(path.join(__dirname, 'hook-worker.js'), { workerData: { config } });
+  if (shutdown) return;
+  const worker = hookWorker = new Worker(path.join(__dirname, 'hook-worker.js'), { workerData: { config } });
   worker.on('message', (m) => {
-    if (m.type === 'quit') return app.exit(0);
+    if (m.type === 'quit-request') return requestShutdown(false);
+    if (m.type === 'stopped') {
+      if (!m.clean) log('Не удалось подтвердить освобождение всех хуков');
+      return;
+    }
     if (m.type === 'log') return log(m.text);
     if (m.type === 'cast-complete') return handleCastComplete(m);
     if (m.type === 'step' && config.debugSteps) return log('Шаг:', m.edge, m.step, Math.round(m.elapsedMs) + ' мс');
@@ -610,9 +618,11 @@ function startWorker() {
     if (m.type === 'ready') {
       hookThreadId = m.threadId;
       log('Хук клавиатуры установлен');
+      if (shutdown) return toHook(WM_APP_QUIT, 0);
       return toHook(WM_APP_VOICE_READY, voiceReady ? 1 : 0);
     }
     if (m.type === 'state') {
+      if (shutdown) return;
       last = { state: m.state };
       if (!m.state.enabled) discardWaiting();
       broadcast({ ...last, event: m.event });
@@ -622,11 +632,51 @@ function startWorker() {
     }
   });
   worker.on('error', (e) => log('Ошибка потока хука:', e.stack || e));
-  worker.on('exit', () => {
+  worker.on('exit', (code) => {
+    hookWorker = null;
     hookThreadId = 0;
+    if (shutdown) return finishShutdown();
+    log('Поток ввода завершён, код:', code);
     if (activeCast) handleCastComplete({ id: activeCast.id, ok: false, reason: 'Поток ввода завершён', profile: activeCast.profile, elapsedMs: 0 });
   });
 }
+
+// Shutdown is cooperative: wait for worker exit, not merely a message or timer.
+function requestShutdown(restart = false, code = 0) {
+  if (shutdown || exiting) return;
+  shutdown = { restart, code, retry: null };
+  discardWaiting();
+  if (last) {
+    last = { state: { ...last.state, enabled: false } };
+    broadcast({ ...last, event: 'toggle' });
+  }
+  if (!hookWorker) return finishShutdown();
+  const started = Date.now();
+  const request = () => {
+    if (!hookWorker) return;
+    if (hookThreadId) toHook(WM_APP_QUIT, 0);
+    if (Date.now() - started > 5000 && !shutdown.warned) {
+      shutdown.warned = true;
+      log('Ожидаю завершения потока ввода; принудительное завершение отключено.');
+    }
+  };
+  request();
+  shutdown.retry = setInterval(request, 250);
+}
+function finishShutdown() {
+  if (!shutdown || hookWorker || exiting) return;
+  exiting = true;
+  clearInterval(shutdown.retry);
+  for (const client of clients) client.end();
+  clients.clear();
+  server.close();
+  if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+  if (shutdown.restart) app.relaunch();
+  app.exit(shutdown.code);
+}
+app.on('before-quit', (event) => {
+  if (!exiting) { event.preventDefault(); requestShutdown(false); }
+});
 
 // ---------- Окно поверх игры (в нём же работает распознавание) ----------
 function createWindow() {
@@ -675,13 +725,14 @@ app.whenReady().then(async () => {
   } catch (e) {
     log('Не удалось подготовить модель распознавания, голос работать не будет:', e.message);
   }
+  if (shutdown) return;
   if (skipped.length) log(`Фразы не по-русски пропущены (слушает только русская модель): ${skipped.join(', ')}`);
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
       log(`Порт ${config.port} уже занят (плагин уже запущен или порт занят другой программой).`);
       log('Укажи другой порт в config.json и в файле .cfg для Dota');
     } else log('Ошибка сервера:', e.message);
-    setTimeout(() => app.exit(1), 5000);
+    setTimeout(() => requestShutdown(false, 1), 5000);
   });
   server.listen(config.port, '127.0.0.1', () => {
     const k = config.keys;
@@ -696,4 +747,4 @@ app.whenReady().then(async () => {
     if (firstRun) openSettings();
   });
 });
-app.on('window-all-closed', () => app.exit(0));
+app.on('window-all-closed', () => requestShutdown(false));
