@@ -53,6 +53,8 @@ jobs:
 
       - name: Download and verify the actual V2 archive
         run: node scripts/fetch-model.js model
+      - name: Full Electron lifecycle check
+        run: node scripts/lifecycle-check.js
       - uses: actions/upload-artifact@v4
         if: matrix.node == '22'
         with:
