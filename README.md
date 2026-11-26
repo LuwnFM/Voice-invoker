@@ -2,9 +2,9 @@
 
 Голосовое управление способностями Инвокера в Dota 2 для Windows 10/11 x64. Произноси название способности, русскую реплику героя или привычное сокращение — приложение распознаёт фразу и выполняет голосовой каст с учётом выбранных настроек и данных игры (GSI).
 
-Текущая версия: **1.1.0-rc.4** (Release Candidate).
+Текущая версия: **1.1.0-rc.3** (Release Candidate).
 
-[Скачать релиз](https://github.com/LuwnFM/Voice-invoker/releases/tag/v1.1.0-rc.4) · [Модель на Google Диске](https://drive.google.com/file/d/1inyLlShd7d6Lql1MosCWKGdnPUvmKXZD/view) · [Документация](docs/CONFIGURATION.md)
+[Скачать релиз](https://github.com/LuwnFM/Voice-invoker/releases/tag/v1.1.0-rc.3) · [Модель на Google Диске](https://drive.google.com/file/d/1inyLlShd7d6Lql1MosCWKGdnPUvmKXZD/view) · [Документация](docs/CONFIGURATION.md)
 
 ## Возможности
 
@@ -22,7 +22,7 @@
 
 ## Установка и запуск
 
-1. Скачай [Source code (zip) текущего релиза](https://github.com/LuwnFM/Voice-invoker/archive/refs/tags/v1.1.0-rc.4.zip) и распакуй архив в отдельную папку.
+1. Скачай [Source code (zip) текущего релиза](https://github.com/LuwnFM/Voice-invoker/archive/refs/tags/v1.1.0-rc.3.zip) и распакуй архив в отдельную папку.
 2. Установи [Node.js 22 LTS x64](https://nodejs.org/en/download), если его ещё нет. На компьютере должны быть Steam и установленная Dota 2.
 3. Закрой Dota 2 и запусти `start.bat`. Скрипт при необходимости установит npm-зависимости, найдёт игру, установит GSI и запустит Dota с параметрами `-gamestateintegration -windowed -noborder`, затем приложение. Постоянные параметры запуска Steam и личные бинды не переписываются.
 4. При первом запуске модель Invoker V2 скачивается автоматически. Дождись завершения загрузки, проверь настройки клавиш и микрофона. В `log.txt` при успешной проверке модели появится `Invoker V2 (SHA-256 OK)`.
@@ -41,7 +41,7 @@
 - Встроенный набор приложения: **143 фразы** с V2, **96** со штатной моделью. Пользовательский конфиг может переопределять часть фраз.
 - При отсутствии или повреждении архива приложение загружает V2 с Google Диска, проверяя размер и SHA-256 до сохранения. При ошибке скачивания используется штатная русская модель с предупреждением в журнале.
 
-Скачать вручную: [GitHub Releases](https://github.com/LuwnFM/Voice-invoker/releases/download/v1.1.0-rc.4/vosk-model-small-ru-invoker.tar.gz) или [Google Диск](https://drive.google.com/file/d/1inyLlShd7d6Lql1MosCWKGdnPUvmKXZD/view). Положи файл в `model/vosk-model-small-ru-invoker.tar.gz` рядом с программой, не распаковывая tar.gz. Исходный ZIP приложения сам по себе не содержит модель.
+Скачать вручную: [GitHub Releases](https://github.com/LuwnFM/Voice-invoker/releases/download/v1.1.0-rc.3/vosk-model-small-ru-invoker.tar.gz) или [Google Диск](https://drive.google.com/file/d/1inyLlShd7d6Lql1MosCWKGdnPUvmKXZD/view). Положи файл в `model/vosk-model-small-ru-invoker.tar.gz` рядом с программой, не распаковывая tar.gz. Исходный ZIP приложения сам по себе не содержит модель.
 
 SHA-256: `dcba103f27b209415fae50065d420ab59f171bff7da047f60f3801c09de8ba90`.
 
