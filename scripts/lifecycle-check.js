@@ -4,16 +4,18 @@ const os = require('node:os');
 const { spawnSync, execFileSync } = require('node:child_process');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
-const exe = path.join(root,'node_modules','electron','dist','electron.exe');
+const packaged=process.env.VI_PACKAGED==='1';
+const exe=packaged?path.resolve(root,'..','..','VoiceInvoker.exe'):path.join(root,'node_modules','electron','dist','electron.exe');
+const launcher=packaged?exe:process.execPath;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(),'vi-lifecycle-'));
 const config = path.join(root,'config.json');
 const original = fs.readFileSync(config);
 const base = 'http://127.0.0.1:3055';
 const env = {...process.env, VI_LIFECYCLE_DIR:dir, VI_EXE:exe};
-delete env.ELECTRON_RUN_AS_NODE;
+if(packaged)env.ELECTRON_RUN_AS_NODE='1';else delete env.ELECTRON_RUN_AS_NODE;
 const pause = ms => new Promise(resolve=>setTimeout(resolve,ms));
 function pids() {
-  const cmd = "Get-CimInstance Win32_Process -Filter \"Name='electron.exe'\" | Where-Object { $_.ExecutablePath -eq $env:VI_EXE } | ForEach-Object { $_.ProcessId }";
+  const cmd = "Get-CimInstance Win32_Process -Filter \"Name='" + path.basename(exe) + "'\" | Where-Object { $_.ExecutablePath -eq $env:VI_EXE } | ForEach-Object { $_.ProcessId }";
   return execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',cmd],{env,encoding:'utf8'}).trim().split(/\s+/).filter(Boolean).map(Number);
 }
 async function waitFor(label, fn, ms=60000) {
@@ -38,9 +40,9 @@ async function ready(previous=0) {
 (async()=>{
   fs.writeFileSync(config,JSON.stringify({...JSON.parse(original),windowTitle:'Voice Invoker lifecycle test only',blockKeys:[],listen:'hold',keys:{quas:'Q',wex:'W',exort:'E',invoke:'R',slot1:'D',slot2:'F'}}));
   assert.deepEqual(pids(),[],'No pre-existing test Electron');
-  const args=['-e','require("./scripts/launch").launchBackground(process.argv[1])',path.join(__dirname,'lifecycle-entry.js')];
+  const args=['-e','require("./scripts/launch").launchBackground(process.argv[1])',packaged?root:path.join(__dirname,'lifecycle-entry.js')];
   const start = () => {
-    const child=spawnSync(process.execPath,args,{cwd:root,env,encoding:'utf8',timeout:15000});
+    const child=spawnSync(launcher,args,{cwd:root,env,encoding:'utf8',timeout:15000});
     assert.equal(child.status,0,child.stderr || String(child.error || ''));
     const pid=Number(/supervisor PID (\d+)/.exec(child.stdout)?.[1]);
     assert.ok(pid, child.stdout);
@@ -65,7 +67,7 @@ async function ready(previous=0) {
   await waitFor('all Electron processes gone',()=>pids().length===0);
   const running = id => { try { process.kill(id,0); return true; } catch(e) { if(e.code==='ESRCH') return false; throw e; } };
   await waitFor('both background supervisors exited',()=>!running(supervisor)&&!running(duplicate));
-  const dist=path.dirname(exe),moved=dist+'.lifecycle-check';
+  const dist=packaged?exe:path.dirname(exe),moved=dist+'.lifecycle-check';
   // Windows can release executable mapping / antivirus handles shortly after the
   // last process exits. Require a real rename, within a bounded grace period.
   const releasedAt=Date.now();

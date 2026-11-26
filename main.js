@@ -28,7 +28,7 @@ const { processStatus } = require('./diagnostics');
 const { ACTION, vkOf } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
-const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT } = require('./messages');
+const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT, WM_APP_TOGGLE } = require('./messages');
 
 const config = {
   port: 3055,
@@ -769,6 +769,7 @@ async function createTray() {
     tray.setToolTip('Voice Invoker — работает');
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Настройки', click: openSettings },
+      { label: 'Включить / выключить распознавание', click: () => toHook(WM_APP_TOGGLE,0) },
       { label: 'Перезапустить', click: () => requestShutdown(true) },
       { label: 'Открыть журнал', click: () => shell.openPath(LOG_FILE).then(error => { if (error) log(error); }) },
       { label: 'Папка журналов', click: () => shell.openPath(__dirname) },

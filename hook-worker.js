@@ -7,7 +7,7 @@ const koffi = require('koffi');
 const SPELLS = [...require('./spells'), ...require('./items').ITEM_SLOTS];
 const { createVoiceCast } = require('./logic');
 const { decodeCast } = require('./timing-profiles');
-const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST } = require('./messages');
+const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST, WM_APP_TOGGLE } = require('./messages');
 
 const config = workerData.config;
 const user32 = koffi.load('user32.dll');
@@ -258,6 +258,8 @@ try {
         KillTimer(null, seqTimer);
         seqTimer = 0;
         runSequence();
+      } else if (type === WM_APP_TOGGLE) {
+        voice.toggle();
       } else if (type === WM_APP_VOICE_READY) {
         voice.setVoiceReady(wParam === 1);
       }

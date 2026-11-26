@@ -55,6 +55,24 @@ jobs:
         run: node scripts/fetch-model.js model
       - name: Full Electron lifecycle check
         run: node scripts/lifecycle-check.js
+      - name: Build standalone installer and portable package
+        if: matrix.node == '22'
+        shell: powershell
+        run: |
+          if (-not (Test-Path (Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'NSIS\makensis.exe'))) {
+            choco install nsis --version=3.11 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          }
+          .\scripts\build-windows.ps1 -Installer
+      - uses: actions/upload-artifact@v4
+        if: matrix.node == '22'
+        with:
+          name: windows-packages
+          path: |
+            build-output/VoiceInvoker-Portable-*.zip
+            build-output/VoiceInvoker-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: matrix.node == '22'
         with:
@@ -78,6 +96,10 @@ jobs:
         with:
           name: invoker-v2
           path: model
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-packages
+          path: windows-packages
       - name: Verify release model
         run: node scripts/fetch-model.js model
       - name: Publish release candidate with model
@@ -87,10 +109,10 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$(node -p "require('./package.json').version")"
-          if [[ "$tag" != "v1.1.0-rc.6" ]]; then exit 0; fi
+          if [[ "$tag" != "v1.1.0-rc.7" ]]; then exit 0; fi
           [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" == "$GITHUB_SHA" ]] || exit 0
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $tag already exists; not overwriting."
             exit 0
           fi
-          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.6" --notes-file RELEASE_NOTES.md
+          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz windows-packages/*.zip windows-packages/*.exe --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.7" --notes-file RELEASE_NOTES.md

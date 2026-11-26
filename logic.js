@@ -71,6 +71,12 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
     send(on ? 'listen' : 'unlisten');
   }
 
+  function toggle() {
+    s.enabled = !s.enabled;
+    s.chat = false;
+    if (!always) s.listening = false;
+    send('toggle');
+  }
   function setVoiceReady(ready) {
     s.voiceReady = ready;
     send('voice');
@@ -102,10 +108,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
         send('profile');
         return swallow(vk);
       }
-      s.enabled = !s.enabled;
-      s.chat = false;
-      if (!always) s.listening = false;
-      send('toggle');
+      toggle();
       return swallow(vk);
     }
     // Автоповтор уже заблокированной клавиши тоже не пропускаем
@@ -166,7 +169,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
     return steps;
   }
 
-  return { handleKey, setVoiceReady, buildSequence, state: s, send };
+  return { handleKey, setVoiceReady, buildSequence, state: s, send, toggle };
 }
 
 module.exports = { createVoiceCast, vkOf, ACTION };
