@@ -98,6 +98,9 @@ const useExpanded = userConfig.expandedVocabulary === true && fs.existsSync(expa
 for (const [suffix, extra] of Object.entries(EXTRA_PHRASES)) {
   const id = 'invoker_' + suffix;
   config.phrases[id] = [...new Set([...(config.phrases[id] || []), ...extra.ready, ...(useExpanded ? extra.pending : [])])];
+  // These short aliases were retired; also remove them from older saved configurations.
+  const retired = suffix === 'sun_strike' ? ['сан'] : suffix === 'cataclysm' ? ['ката', 'катак'] : [];
+  config.phrases[id] = config.phrases[id].filter((phrase) => !retired.includes(phrase.trim().toLowerCase()));
 }
 
 const isRussian = (phrase) => /[а-яё]/i.test(phrase);
