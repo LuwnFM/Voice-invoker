@@ -137,7 +137,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
     const timing = getTiming(config, profile);
     const steps = [];
     if(spell.itemSlot){
-      const vk=vkOf(config.keys?.['item'+spell.itemSlot]);
+      const vk=vkOf(config.keys?.[spell.key]);
       if(!vk||![ACTION.SLOT1,ACTION.SLOT2].includes(action))throw Error('Invalid item slot');
       steps.push({type:'key',vk,wait:0});
       if(action===ACTION.SLOT1)steps.push({type:'click',wait:timing.clickDelayMs});

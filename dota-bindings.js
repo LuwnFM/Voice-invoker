@@ -10,23 +10,24 @@ function parseVdf(text){
  function block(nested=false){const out=Object.create(null);for(;;){const k=next();if(k===undefined){if(nested)throw Error('Unclosed VDF block');return out;}if(k==='}'){if(!nested)throw Error('Unexpected VDF brace');return out;}const v=next();if(v===undefined||v==='}')throw Error('Missing VDF value');out[value(k).toLowerCase()]=v==='{'?block(true):value(v);}}
  return block();
 }
-const actions={quas:'abilityprimary1',wex:'abilityprimary2',exort:'abilityprimary3',invoke:'abilityultimate',slot1:'abilitysecondary1',slot2:'abilitysecondary2',voice:'chatvoiceteam',...Object.fromEntries(Array.from({length:6},(_,i)=>['item'+(i+1),'inventory'+(i+1)]))};
+const actions={quas:'abilityprimary1',wex:'abilityprimary2',exort:'abilityprimary3',invoke:'abilityultimate',slot1:'abilitysecondary1',slot2:'abilitysecondary2',voice:'chatvoiceteam',neutral:'inventoryneutral',teleport:'inventorytp',...Object.fromEntries(Array.from({length:6},(_,i)=>['item'+(i+1),'inventory'+(i+1)]))};
 const aliases={uparrow:'UP',downarrow:'DOWN',leftarrow:'LEFT',rightarrow:'RIGHT',kp_multiply:'NUM*',kp_plus:'NUM+',kp_minus:'NUM-',kp_del:'NUM.',kp_slash:'NUM/',semicolon:';',key_cyrillic_be:',',key_cyrillic_yu:'.',key_cyrillic_e:"'",key_cyrillic_zhe:';',key_cyrillic_ha:'[',key_cyrillic_hard_sign:']',key_cyrillic_yo:'`'};
 function readBindings(text){
  const root=parseVdf(text).keybindings;if(!root?.keys)throw Error('Нет раздела KeyBindings/Keys');
- const keys={},slotCastModes={},itemCastModes={},warnings=[];
+ const keys={},slotCastModes={},warnings=[];
  if(root.useherobindings==='1')warnings.push('Индивидуальные бинды героев не поддерживаются; общие клавиши требуют проверки.');
  for(const [name,action] of Object.entries(actions)){
-   const node=root.keys[action];if(!node)continue;
+   const normal=root.keys[action],quick=root.keys[action+'quickcast'];
+   const node=normal?.key?normal:quick?.key?quick:null;if(!node)continue;
    const raw=String(node.key||'').toLowerCase(),key=aliases[raw]||(/^kp_\d$/.test(raw)?'NUM'+raw.at(-1):raw.toUpperCase());
    if((node.modifier&&node.modifier.toLowerCase()!=='none')||!vkOf(key)){warnings.push(action+': неподдерживаемая клавиша или модификатор');continue;}
    keys[name]=key;
-   if(/^(slot|item)/.test(name)&&['0','1'].includes(node.mode))slotCastModes[name]=node.mode==='1'?'quickcast':'click';
+   if(/^(slot|item)/.test(name)||['neutral','teleport'].includes(name)) {
+     if(node===quick||node.mode==='2'||node.mode==='1')slotCastModes[name]='quickcast';
+     else if(node.mode==='0')slotCastModes[name]='click';
+   }
  }
- for(const item of ['item_blink','item_overwhelming_blink','item_swift_blink','item_arcane_blink']){
-   const mode=root.items?.[item]?.mode;if(['0','1'].includes(mode))itemCastModes[item]=mode==='1'?'quickcast':'click';
- }
- return {keys,slotCastModes,itemCastModes,warnings};
+ return {keys,slotCastModes,warnings};
 }
 function registry(key,name){
  try{const out=execFileSync('reg.exe',['query',key,'/v',name],{encoding:'utf8',windowsHide:true,timeout:3000});return out.split(/\r?\n/).find(l=>l.trim().toLowerCase().startsWith(name.toLowerCase()+' '))?.trim().split(/\s+REG_\w+\s+/i)[1];}catch{return undefined;}

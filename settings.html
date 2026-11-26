@@ -99,7 +99,7 @@
 </div>
 
 <div class="actions"><label>Слот 1 <select class="control" id="slot1Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label><label>Слот 2 <select class="control" id="slot2Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label></div>
-<details><summary>Индивидуальный каст Blink Dagger</summary><div id="itemModes" class="actions"></div></details>
+
 <h2>Скорость нажатий</h2>
 <p class="hint">Ctrl+Shift+F10 — включить обычный режим; Ctrl+Shift+F11 — включить ускоренный; Ctrl+Shift+F12 — турбо (экспериментальные). Уже начатая команда завершится с прежним профилем. Ctrl+Shift+F7 — вкл/выкл.</p>
 
@@ -124,6 +124,9 @@
 <h2>Голосовые фразы</h2>
 <p class="hint">Выбирай только нужные фразы. Снятая галочка исключает фразу из грамматики после перезапуска. Включение всех восстанавливает исходный список. Распознавание похожих слов всё равно может ошибаться.</p>
 <div id="phrases"></div>
+<h2>Фразы для слотов предметов</h2>
+<p class="hint">Введи любое слово или фразу из словаря модели, по одной на строку. Пустой список отключает голосовой слот. Команда применяет предмет, который находится в этом слоте сейчас. Без свежего GSI предметы не применяются.</p>
+<div class="actions"><input id="wordSearch" class="control" placeholder="Поиск слова в словаре"><button id="wordFind">Найти слова</button></div><p id="wordResults" class="hint" style="user-select:text"></p><div id="itemPhrases"></div>
 <h2>Дополнительно</h2>
 <div class="opts"><label><input id="experimentalFrames" type="checkbox"> Экспериментально: frames-per-chunk=3 (выключено по умолчанию)</label>
 <label><input id="testOnly" type="checkbox"> Тест распознавания без нажатий (после перезапуска)</label></div>
@@ -139,7 +142,8 @@
     ['quas', 'Quas', 'сфера льда'], ['wex', 'Wex', 'сфера молний'], ['exort', 'Exort', 'сфера огня'],
     ['invoke', 'Invoke', ''], ['slot1', 'Слот 1', 'первая собранная способность'], ['slot2', 'Слот 2', 'вторая собранная способность'],
     ['voice', 'Голосовой чат', 'зажимаешь — плагин слушает'],
-    ...Array.from({length:6},(_,i)=>['item'+(i+1),'Предмет '+(i+1),'Необязательно: для Blink Dagger']),
+    ...Array.from({length:6},(_,i)=>['item'+(i+1),'Предмет '+(i+1),'Необязательно']),
+    ['neutral','Нейтральный предмет','Необязательно'],['teleport','Телепорт','Необязательно'],
   ];
   // KeyboardEvent.code -> имя клавиши, как его понимает logic.js (vkOf)
   const CODE_NAMES = {
@@ -194,9 +198,9 @@
       row.className = 'row';
       row.innerHTML = `<div class="label">${name}${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
       row.append(keyButton(id));
-      if(id.startsWith('item')){
+      if(id.startsWith('item')||id==='neutral'||id==='teleport'){
         const select=document.createElement('select');select.className='control';select.dataset.itemMode=id;
-        for(const [v,t] of [['','Общий режим'],['click','Обычный'],['quickcast','Быстрый']])select.add(new Option(t,v));select.value=state.slotModes?.[id]||'';
+        for(const [v,t] of [['quickcast','Только клавиша'],['click','Клавиша + клик']])select.add(new Option(t,v));select.value=state.slotModes?.[id]||'quickcast';
         const clear=document.createElement('button');clear.className='control';clear.textContent='×';clear.title='Очистить';clear.onclick=()=>setKey(id,'');row.append(select,clear);
       }
       dota.append(row);
@@ -309,7 +313,7 @@
       const details=document.createElement('details'), summary=document.createElement('summary'), list=document.createElement('div'), actions=document.createElement('div');
       list.className='phrase-list';actions.className='actions';
       const disabled=new Set(c.disabledPhrases?.[id]||[]),boxes=[];
-      const update=()=>summary.textContent=(spellNames[id.replace(/^(invoker_|item_)/,'')]||id)+' — '+boxes.filter(x=>x.checked).length+'/'+boxes.length;
+      const update=()=>summary.textContent=(spellNames[id.replace(/^(invoker_|item_)/,'')]||id)+' — '+boxes.filter(x=>x.checked).length+'/'+boxes.length+(boxes.some(x=>x.checked)?'':' · отключено');
       for(const phrase of phrases){
         const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.checked=!disabled.has(phrase);box.dataset.spell=id;box.dataset.phrase=phrase;
         box.addEventListener('change',update);boxes.push(box);label.append(box,document.createTextNode(phrase));list.append(label);
@@ -338,17 +342,20 @@
   $('#openLogs').onclick=()=>fetch('/open-logs',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   $('#copyReport').onclick=async()=>{try{if(!report)await refreshDiagnostics();if(!report)throw Error('Нет отчёта');const {lastTest,...safe}=report;await navigator.clipboard.writeText(JSON.stringify(safe,null,2));status('Отчёт скопирован','ok');}catch(e){status(e.message,'bad');}};
   refreshDiagnostics();setInterval(refreshDiagnostics,2000);
-  function buildItemModes(){
-    const host=$('#itemModes');host.replaceChildren();
-    for(const [id,name] of [['item_blink','Blink'],['item_overwhelming_blink','Overwhelming'],['item_swift_blink','Swift'],['item_arcane_blink','Arcane']]){
-      const label=document.createElement('label'),select=document.createElement('select');select.className='control';select.dataset.variant=id;
-      for(const [v,t] of [['','Как слот'],['click','Обычный'],['quickcast','Быстрый']])select.add(new Option(t,v));select.value=state.itemModes?.[id]||'';label.append(document.createTextNode(name+' '),select);host.append(label);
+  function buildItemPhrases(c){
+    const host=$('#itemPhrases');host.replaceChildren();
+    for(const slot of c.itemSlots||[]){
+      const details=document.createElement('details'),summary=document.createElement('summary'),area=document.createElement('textarea');
+      area.className='control';area.style.width='100%';area.rows=4;area.dataset.itemPhrase=slot.id;area.placeholder='Одна фраза на строку';area.value=(c.itemPhrases?.[slot.id]||[]).join('\n');
+      const update=()=>summary.textContent=slot.name+' — '+area.value.split(/\r?\n/).filter(x=>x.trim()).length+' фраз';
+      area.oninput=()=>{update();status('Есть несохранённые изменения');};update();details.append(summary,area);host.append(details);
     }
+    if(!c.dictionaryReady)$('#wordResults').textContent='Словарь не загружен: новые фразы нельзя проверить.';
   }
+  $('#wordFind').onclick=async()=>{try{const q=$('#wordSearch').value;const d=await (await fetch('/dictionary?q='+encodeURIComponent(q))).json();$('#wordResults').textContent=d.ready?(d.exact?'Слово есть. ':'')+(d.matches.join(', ')||'Нет совпадений'):'Словарь недоступен';}catch(e){status(e.message,'bad');}};
   $('#importBinds').onclick=async()=>{
     try{const d=await (await fetch('/import-bindings',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();if(!d.ok)throw Error(d.error);
       const {voice,...keys}=d.keys;Object.assign(state.keys,keys);if(voice)state.voice=voice;
-      state.itemModes={...state.itemModes,...d.itemCastModes};buildItemModes();
       for(const [id,mode] of Object.entries(d.slotCastModes)){const el=$('#'+id+'Mode')||document.querySelector('[data-item-mode="'+id+'"]');if(el)el.value=mode;}
       render();status('Импортировано '+Object.keys(d.keys).length+' клавиш. Проверь и сохрани. '+d.warnings.join('; '),d.warnings.length?'bad':'ok');
     }catch(e){status('Импорт: '+e.message,'bad');}
@@ -360,7 +367,7 @@
       experimentalFrames: $('#experimentalFrames').checked,
       testOnly: $('#testOnly').checked,
       slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value,...Object.fromEntries([...document.querySelectorAll('[data-item-mode]')].map(e=>[e.dataset.itemMode,e.value]))},
-      itemCastModes: Object.fromEntries([...document.querySelectorAll('[data-variant]')].map(e=>[e.dataset.variant,e.value])),
+      itemPhrases: Object.fromEntries([...document.querySelectorAll('[data-item-phrase]')].map(e=>[e.dataset.itemPhrase,e.value.split(/\r?\n/).filter(p=>p.trim())])),
       voiceChatKey: state.voice,
       castMode: document.querySelector('input[name=castMode]:checked')?.value,
       listen: document.querySelector('input[name=listen]:checked')?.value,
@@ -393,7 +400,7 @@
 
   fetch('/config').then((r) => r.json()).then((c) => {
     state.keys = { ...c.keys };
-    state.slotModes=c.slotCastModes||{};state.itemModes=c.itemCastModes||{};buildItemModes();
+    state.slotModes=c.slotCastModes||{};buildItemPhrases(c);
     state.voice = String(c.voiceChatKey || '').toUpperCase();
     for (const k of Object.keys(state.keys)) state.keys[k] = String(state.keys[k]).toUpperCase();
     const pick = (name, v) => { const i = document.querySelector(`input[name=${name}][value="${v}"]`); if (i) i.checked = true; };

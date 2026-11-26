@@ -1,17 +1,22 @@
-const BLINK_NAMES = ['item_blink','item_overwhelming_blink','item_swift_blink','item_arcane_blink'];
-const ITEM_COMMAND={id:'item_blink',name:'Blink Dagger'};
-const ITEM_SLOTS=Object.freeze(Array.from({length:6},(_,i)=>Object.freeze({...ITEM_COMMAND,itemSlot:i+1})));
-function planBlink(gsi, config, prepareOnly=false, now=Date.now()) {
-  const refuse=reason=>({refuse:'Blink Dagger: '+reason});
-  if(prepareOnly)return refuse('предмет нельзя подготовить');
-  if(!gsi||now-gsi.at>=5000||gsi.hero!=='npc_dota_hero_invoker'||!gsi.alive)return refuse('нет свежих данных живого Инвокера');
-  if(!Array.isArray(gsi.items))return refuse('нет данных инвентаря');
-  const matches=gsi.items.slice(0,6).map((item,i)=>({item,i})).filter(({item})=>BLINK_NAMES.includes(item?.name));
-  const usable=matches.find(({item,i})=>Number.isFinite(item.cooldown)&&item.cooldown<=0&&item.can_cast===true&&config.keys?.['item'+(i+1)]);
-  if(!usable)return refuse(matches.length?'перезарядка, нельзя применить или не назначена клавиша':'нет предмета в основных слотах');
-  const {item,i}=usable,slot='item'+(i+1);
-  const slotMode=config.slotCastModes?.[slot]||config.itemCastMode||config.castMode;
-  const click=slotMode!=='quickcast'||config.itemCastModes?.[item.name]==='click';
-  return {itemSlot:i+1,action:click?1:2};
+// Voice commands target an inventory slot, not a particular item name.
+const {vkOf,ACTION}=require('./logic');
+const ITEM_KEYS=Object.freeze([...Array.from({length:6},(_,i)=>'item'+(i+1)),'neutral','teleport']);
+const ITEM_SLOTS=Object.freeze(ITEM_KEYS.map((key,i)=>Object.freeze({id:'item_slot_'+key,name:i<6?'Предмет '+(i+1):key==='neutral'?'Нейтральный предмет':'Телепорт',itemSlot:i+1,key})));
+function readInventory(items){
+  if(!items||typeof items!=='object')return null;
+  return [...Array.from({length:6},(_,i)=>items['slot'+i]||null),items.neutral0||null,items.teleport0||null];
 }
-module.exports={BLINK_NAMES,ITEM_COMMAND,ITEM_SLOTS,planBlink};
+function planItem(spell,gsi,config,prepareOnly=false,now=Date.now()){
+  const refuse=reason=>({refuse:spell.name+': '+reason});
+  if(prepareOnly)return refuse('предмет нельзя подготовить');
+  if(!gsi||now-gsi.at>=5000||gsi.hero!=='npc_dota_hero_invoker'||gsi.alive!==true)return refuse('нет свежих данных живого Инвокера');
+  if(!Array.isArray(gsi.items))return refuse('нет данных инвентаря');
+  const item=gsi.items[spell.itemSlot-1];
+  if(!item||!item.name||item.name==='empty'||item.name==='item_empty')return refuse('слот пуст');
+  if(!Number.isFinite(item.cooldown)||item.cooldown>0||item.can_cast!==true)return refuse('предмет недоступен или на перезарядке');
+  if(item.passive===true)return refuse('пассивный предмет');
+  if(!vkOf(config.keys?.[spell.key]))return refuse('не назначена клавиша');
+  // No extra click unless explicitly requested. Items may be instant or no-target.
+  return {itemSlot:spell.itemSlot,action:config.slotCastModes?.[spell.key]==='click'?ACTION.SLOT1:ACTION.SLOT2};
+}
+module.exports={ITEM_KEYS,ITEM_SLOTS,readInventory,planItem};

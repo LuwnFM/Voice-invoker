@@ -22,7 +22,9 @@ const path = require('path');
 const { execFileSync, execFile } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
-const { ITEM_COMMAND, ITEM_SLOTS, planBlink } = require('./items');
+const { ITEM_KEYS, ITEM_SLOTS, readInventory, planItem } = require('./items');
+const { readModelWords } = require('./model-words');
+const { validateItemPhrases } = require('./item-phrases');
 const { importBindings } = require('./dota-bindings');
 const { processStatus } = require('./diagnostics');
 const { ACTION, vkOf } = require('./logic');
@@ -120,9 +122,8 @@ const RU_URL = `https://alphacephei.com/vosk/models/${RU_NAME}.zip`;
 let RU_PATH = path.join(MODEL_DIR, RU_NAME + '.tar.gz');
 const phraseToSpell = {};
 const skipped = [];
-const allPhrases = catalog({...config.phrases,item_blink:['блинк','прыжок',...(config.phrases.item_blink||[])]}, EXTRA_PHRASES);
-// New item commands are opt-in. Existing installations retain all spell aliases.
-if (!Object.hasOwn(config.disabledPhrases||{},'item_blink')) config.disabledPhrases={...(config.disabledPhrases||{}),item_blink:allPhrases.item_blink};
+const allPhrases = catalog(Object.fromEntries(Object.entries(config.phrases).filter(([id])=>SPELLS.some(s=>s.id===id))), EXTRA_PHRASES);
+let modelWords=null;
 let modelInfo = { active: false, reason: 'initializing' }, experimental = null;
 let voiceInfo = {ready:false, message:''}, lastTest = null;
 const testOnly = config.testOnly === true;
@@ -132,9 +133,12 @@ function configurePhrases(useExpanded) {
   config.phrases = enabledPhrases(allPhrases, exclusions(config.disabledPhrases, allPhrases), EXTRA_PHRASES, useExpanded);
   const isRussian = (phrase) => /[а-яё]/i.test(phrase);
   // Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
-  for (const s of [...SPELLS, ITEM_COMMAND]) {
+  const custom=validateItemPhrases(config.itemPhrases,modelWords,allPhrases,{strict:false});
+  if(custom.errors.length)log('Пропущенные фразы предметов:',custom.errors.join('; '));
+  Object.assign(config.phrases,custom.phrases);
+  for (const s of [...SPELLS, ...ITEM_SLOTS]) {
     for (const p of config.phrases[s.id] || []) {
-      if (isRussian(p)) phraseToSpell[p.toLowerCase()] = s.id;
+      if (isRussian(p) || s.itemSlot) phraseToSpell[p.toLowerCase()] = s.id;
       else skipped.push(p);
     }
   }
@@ -212,7 +216,7 @@ function handleGsi(data) {
     scepter: data.hero?.aghanims_scepter, // undefined, если игра не сообщает
     abilities,
     slots,
-    items: data.items ? Array.from({length:9},(_,i)=>data.items['slot'+i]||null) : null,
+    items: readInventory(data.items),
   };
   checkSlot();
   // Очередь могла ждать свежих данных об Invoke
@@ -230,7 +234,7 @@ function prediction() {
 
 // Решаем, что нажимать для способности: { action }, { refuse: причина } или { wait: true }
 function plan(spell, prepareOnly = false) {
-  if (spell.id === 'item_blink') return planBlink(gsi,config,prepareOnly);
+  if (spell.itemSlot) return planItem(spell,gsi,config,prepareOnly);
   const fresh = gsi && Date.now() - gsi.at < 5000 && gsi.hero;
   if (!fresh) {
     if (!gsiWarned) log('Нет данных от Dota (GSI) — кастую вслепую: сферы + Invoke + слот 1');
@@ -335,7 +339,8 @@ function discardWaiting() {
 
 function castByPhrase(command) {
   const { phrase, prepareOnly } = decodeVoiceCommand(command);
-  const spell = phraseToSpell[phrase] === 'item_blink' ? ITEM_COMMAND : SPELLS.find((s) => s.id === phraseToSpell[phrase]);
+  const id=phraseToSpell[phrase];
+  const spell = SPELLS.find(s=>s.id===id) || (id?.startsWith('item_slot_') ? ITEM_SLOTS.find(s=>s.id===id) : null);
   if (!spell) return;
   if (!last || !last.state.enabled || activeCast?.timedOut) return;
   // Одну и ту же фразу могут услышать обе модели — второй раз не кастуем
@@ -386,7 +391,7 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
   if (p.itemSlot) {
     const item=ITEM_SLOTS[p.itemSlot-1];
     if(!dispatchCast(item,p.action,profile))return cast(spell,phrase,{refuse:'Поток ввода недоступен'});
-    log('Blink Dagger: слот',p.itemSlot);
+    log('Предмет: '+item.name);
     return broadcast({...last,event:'item',spell:item});
   }
   if (prepareOnly) {
@@ -508,7 +513,6 @@ function sendFile(res, file, type) {
 
 // ---------- Настройки клавиш (окно settings.html пишет в config.json) ----------
 const KEY_NAMES = ['quas', 'wex', 'exort', 'invoke', 'slot1', 'slot2'];
-const ITEM_KEYS=Array.from({length:6},(_,i)=>'item'+(i+1));
 const okKey = (k) => typeof k === 'string' && vkOf(k) > 0;
 
 function settingsData() {
@@ -521,7 +525,9 @@ function settingsData() {
     microphone: config.microphone || '',
     phraseCatalog: allPhrases,
     disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, allPhrases),
-    itemCastModes: userConfig.itemCastModes||{},
+    itemPhrases: userConfig.itemPhrases||{},
+    dictionaryReady: !!modelWords,
+    itemSlots: ITEM_SLOTS.map(({id,name,key})=>({id,name,key})),
     firstRun: !userConfig.keys,
     experimentalFrames: userConfig.experimentalFrames === true,
     testOnly: userConfig.testOnly === true,
@@ -546,7 +552,8 @@ function saveSettings(body) {
   if (typeof body.experimentalFrames === 'boolean') out.experimentalFrames = body.experimentalFrames;
   if (typeof body.testOnly === 'boolean') out.testOnly = body.testOnly;
   if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v)));
-  if (body.itemCastModes&&typeof body.itemCastModes==='object') out.itemCastModes=Object.fromEntries(Object.entries(body.itemCastModes).filter(([k,v])=>['item_blink','item_overwhelming_blink','item_swift_blink','item_arcane_blink'].includes(k)&&['click','quickcast'].includes(v)));
+  if(body.itemPhrases!==undefined)out.itemPhrases=validateItemPhrases(body.itemPhrases,modelWords,allPhrases).phrases;
+  delete out.itemCastModes;
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n');
   userConfig = out;
   log('Настройки сохранены в config.json');
@@ -645,6 +652,11 @@ const server = http.createServer(async (req, res) => {
   if (p === '/diagnostics' && req.method === 'GET') {
     res.writeHead(200, {'Content-Type':'application/json','Cache-Control':'no-store'});
     return res.end(JSON.stringify(await diagnostics()));
+  }
+  if (p === '/dictionary' && req.method === 'GET') {
+    const q=(new URL(req.url,'http://localhost').searchParams.get('q')||'').trim().toLowerCase().slice(0,100);
+    const matches=[];if(modelWords&&q.length>=2)for(const word of modelWords){if(word.startsWith(q))matches.push(word);if(matches.length>=30)break;}
+    res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify({ready:!!modelWords,exact:!!modelWords?.has(q),matches}));
   }
   if (p === '/config' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -861,9 +873,10 @@ app.whenReady().then(async () => {
   try {
     const modelSelection = modelInfo = await prepareExpandedModel(MODEL_DIR, userConfig.expandedVocabulary, { log });
     if (modelSelection.active) RU_PATH = modelSelection.file;
-    configurePhrases(modelSelection.active);
     log('Vosk:', modelSelection.active ? 'Invoker V2 (SHA-256 OK)' : 'stock ru-0.22; expanded model: ' + modelSelection.reason);
     await ensureModel();
+    try {modelWords=readModelWords(RU_PATH);log('Словарь модели:',modelWords.size,'слов');}catch(e){log('Словарь предметов недоступен:',e.message);}
+    configurePhrases(modelSelection.active);
     if (config.experimentalFrames === true && modelSelection.active) {
       try { experimental=experimentalModel(RU_PATH); RU_PATH=experimental.file; log('Экспериментальная модель: frames-per-chunk=3'); }
       catch(e) { log('Экспериментальная модель недоступна, использую обычную V2:',e.message); }
