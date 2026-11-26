@@ -31,6 +31,7 @@ const MSLLHOOKSTRUCT = koffi.struct('MSLLHOOKSTRUCT', {
 const HookProc = koffi.proto('intptr_t __stdcall HookProc(int nCode, uintptr_t wParam, void *lParam)');
 
 const SetWindowsHookExW = user32.func('void * __stdcall SetWindowsHookExW(int idHook, HookProc *lpfn, void *hmod, uint32 dwThreadId)');
+const UnhookWindowsHookEx = user32.func('bool __stdcall UnhookWindowsHookEx(void *hhk)');
 const CallNextHookEx = user32.func('intptr_t __stdcall CallNextHookEx(void *hhk, int nCode, uintptr_t wParam, void *lParam)');
 const GetMessageW = user32.func('int __stdcall GetMessageW(void *lpMsg, void *hWnd, uint32 wMsgFilterMin, uint32 wMsgFilterMax)');
 const GetForegroundWindow = user32.func('void * __stdcall GetForegroundWindow()');
@@ -134,7 +135,7 @@ function isGameActive() {
 const voice = createVoiceCast(config, {
   isGameActive,
   emit: (msg) => parentPort.postMessage({ type: 'state', ...msg }),
-  quit: () => PostThreadMessageW(threadId, WM_APP_QUIT, 0, 0),
+  quit: () => parentPort.postMessage({ type: 'quit-request' }),
   openSettings: () => parentPort.postMessage({ type: 'settings' }),
 });
 
@@ -232,24 +233,24 @@ function mouseProc(nCode, wParam, lParam) {
   return CallNextHookEx(null, nCode, wParam, lParam);
 }
 
-const callback = koffi.register(proc, koffi.pointer(HookProc));
-const hook = SetWindowsHookExW(WH_KEYBOARD_LL, callback, GetModuleHandleW(null), 0);
-const mouseCallback = koffi.register(mouseProc, koffi.pointer(HookProc));
-if (!SetWindowsHookExW(WH_MOUSE_LL, mouseCallback, GetModuleHandleW(null), 0)) {
-  parentPort.postMessage({ type: 'log', text: 'Не удалось установить хук мыши — кнопки мыши работать не будут' });
-}
-if (!hook) {
-  parentPort.postMessage({ type: 'log', text: 'Не удалось установить хук клавиатуры' });
-} else {
+// Release callbacks only after Windows has stopped using them. Never terminate
+// this worker while a registered callback can still be invoked.
+let callback, mouseCallback, hook, mouseHook;
+try {
+  callback = koffi.register(proc, koffi.pointer(HookProc));
+  hook = SetWindowsHookExW(WH_KEYBOARD_LL, callback, GetModuleHandleW(null), 0);
+  if (!hook) throw new Error('Не удалось установить хук клавиатуры');
+  mouseCallback = koffi.register(mouseProc, koffi.pointer(HookProc));
+  mouseHook = SetWindowsHookExW(WH_MOUSE_LL, mouseCallback, GetModuleHandleW(null), 0);
+  if (!mouseHook) parentPort.postMessage({ type: 'log', text: 'Не удалось установить хук мыши — кнопки мыши работать не будут' });
   parentPort.postMessage({ type: 'ready', threadId });
   voice.send('ready');
-  // MSG (x64): hwnd 0..8, message 8..12, wParam 16..24, lParam 24..32
   const msg = Buffer.alloc(64);
-  // Хук вызывается внутри GetMessageW; сюда приходят только сообщения потоку
   while (GetMessageW(msg, null, 0, 0) > 0) {
     const type = msg.readUInt32LE(8);
     const wParam = Number(msg.readBigUInt64LE(16));
     const lParam = Number(msg.readBigInt64LE(24));
+    if (type === WM_APP_QUIT) break;
     try {
       if (type === WM_APP_CAST) {
         startCast(SPELLS[wParam - 1], lParam);
@@ -259,13 +260,20 @@ if (!hook) {
         runSequence();
       } else if (type === WM_APP_VOICE_READY) {
         voice.setVoiceReady(wParam === 1);
-      } else if (type === WM_APP_QUIT) {
-        finishSequence(false, 'Application quit');
-        parentPort.postMessage({ type: 'quit' });
       }
     } catch (e) {
       finishSequence(false, e.message);
       parentPort.postMessage({ type: 'log', text: 'Ошибка потока хука: ' + e.stack });
     }
+  }
+} finally {
+  try { finishSequence(false, 'Application quit'); }
+  finally {
+    const mouseReleased = !mouseHook || UnhookWindowsHookEx(mouseHook);
+    const keyboardReleased = !hook || UnhookWindowsHookEx(hook);
+    if (mouseCallback && mouseReleased) koffi.unregister(mouseCallback);
+    if (callback && keyboardReleased) koffi.unregister(callback);
+    parentPort.postMessage({ type: 'stopped', clean: mouseReleased && keyboardReleased });
+    parentPort.close();
   }
 }
