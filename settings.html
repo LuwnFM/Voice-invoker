@@ -73,12 +73,17 @@
   #status { color: var(--muted); flex: 1; text-align: right; font-size: 14px; }
   #status.bad { color: var(--bad); } #status.ok { color: var(--ready); }
   @media (max-width: 560px) { body { padding: 16px 16px 120px; } footer { flex-wrap: wrap; padding: 12px 16px; } #status { text-align: left; flex-basis: 100%; } }
+  details { margin:8px 0; border:1px solid var(--edge); padding:10px; } summary{cursor:pointer;color:var(--gold);font-weight:bold} .phrase-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px;margin:12px 0} .phrase-list label{display:flex;align-items:flex-start;gap:7px} .phrase-list input{accent-color:var(--ready)} .actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0} .actions button,.control{background:#1d2a33;color:var(--text);border:1px solid var(--edge);padding:8px;cursor:pointer} .diag-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--edge)} .oktext{color:var(--ready)} .warntext{color:var(--gold)}
 </style>
 </head>
 <body>
 <h1>Voice Invoke · клавиши</h1>
 <p class="hint">Нажми на кнопку, затем на клавишу или кнопку мыши (колёсико, боковые 4 и 5). Esc — отмена. Конфликты подсвечиваются красным.</p>
 
+<h2>Проверка</h2>
+<div class="panel" id="diagnostics">Загрузка...</div>
+<div class="actions"><button id="copyReport">Скопировать отчёт</button><button id="refreshReport">Обновить</button></div>
+<p class="hint">Отчёт не включает пути, Steam ID, токен GSI или записи микрофона.</p>
 <h2>Клавиши в Dota</h2>
 <p class="hint">Должны совпадать с твоими настройками в игре.</p>
 <div class="panel" id="dota"></div>
@@ -92,6 +97,7 @@
   <label><input type="radio" name="castMode" value="quickcast"> Быстрый каст (только клавиша)</label>
 </div>
 
+<div class="actions"><label>Слот 1 <select class="control" id="slot1Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label><label>Слот 2 <select class="control" id="slot2Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label></div>
 <h2>Скорость нажатий</h2>
 <p class="hint">Ctrl+Shift+F10 — включить обычный режим; Ctrl+Shift+F11 — включить ускоренный; Ctrl+Shift+F12 — турбо (экспериментальные). Уже начатая команда завершится с прежним профилем. Ctrl+Shift+F7 — вкл/выкл.</p>
 
@@ -113,6 +119,13 @@
   <label><input type="checkbox" name="block" value="slot2"> Слот 2</label>
 </div>
 
+<h2>Голосовые фразы</h2>
+<p class="hint">Выбирай только нужные фразы. Снятая галочка исключает фразу из грамматики после перезапуска. Включение всех восстанавливает исходный список. Распознавание похожих слов всё равно может ошибаться.</p>
+<div id="phrases"></div>
+<h2>Дополнительно</h2>
+<div class="opts"><label><input id="experimentalFrames" type="checkbox"> Экспериментально: frames-per-chunk=3 (выключено по умолчанию)</label>
+<label><input id="testOnly" type="checkbox"> Тест распознавания без нажатий (после перезапуска)</label></div>
+<p class="hint">Тест слушает микрофон постоянно, показывает совпадения в диагностике, не применяет способности и не блокирует клавиши. Чтобы вернуться к игре, отключи тест и перезапусти.</p>
 <footer>
   <button id="save">Сохранить</button>
   <button id="restart">Сохранить и перезапустить</button>
@@ -281,9 +294,47 @@
     })();
   }
 
+  const spellNames={cold_snap:'Cold Snap',ghost_walk:'Ghost Walk',ice_wall:'Ice Wall',emp:'EMP',tornado:'Tornado',alacrity:'Alacrity',sun_strike:'Sun Strike',forge_spirit:'Forge Spirit',chaos_meteor:'Chaos Meteor',deafening_blast:'Deafening Blast',cataclysm:'Cataclysm',blink:'Blink Dagger'};
+  function buildPhrases(c) {
+    const host=$('#phrases');host.replaceChildren();
+    for(const [id,phrases] of Object.entries(c.phraseCatalog||{})) {
+      const details=document.createElement('details'), summary=document.createElement('summary'), list=document.createElement('div'), actions=document.createElement('div');
+      list.className='phrase-list';actions.className='actions';
+      const disabled=new Set(c.disabledPhrases?.[id]||[]),boxes=[];
+      const update=()=>summary.textContent=(spellNames[id.replace(/^(invoker_|item_)/,'')]||id)+' — '+boxes.filter(x=>x.checked).length+'/'+boxes.length;
+      for(const phrase of phrases){
+        const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.checked=!disabled.has(phrase);box.dataset.spell=id;box.dataset.phrase=phrase;
+        box.addEventListener('change',update);boxes.push(box);label.append(box,document.createTextNode(phrase));list.append(label);
+      }
+      for(const [name,on] of [['Включить все',true],['Отключить все',false]]) {
+        const button=document.createElement('button');button.textContent=name;button.onclick=()=>{boxes.forEach(b=>b.checked=on);update();status('Есть несохранённые изменения');};actions.append(button);
+      }
+      update();details.append(summary,actions,list);host.append(details);
+    }
+  }
+  function selectedExclusions(){
+    const out={};for(const b of document.querySelectorAll('#phrases input[data-spell]')){out[b.dataset.spell]??=[];if(!b.checked)out[b.dataset.spell].push(b.dataset.phrase);}return out;
+  }
+  let report=null;
+  async function refreshDiagnostics(){
+    try{
+      const r=await fetch('/diagnostics',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);report=await r.json();
+      const d=report,host=$('#diagnostics');host.replaceChildren();
+      const rows=[['Версия',d.version,true],['GSI-файл',d.gsiInstalled?(d.gsiConfigMatches?'Установлен':'Не совпадает с настройками'):'Не найден',d.gsiInstalled&&d.gsiConfigMatches],['GSI',d.gsiAgeMs===null?'Нет данных':d.gsiAgeMs<5000?'Получены':'Данные устарели',d.gsiAgeMs!==null&&d.gsiAgeMs<5000],['Модель V2',d.modelVerified?'SHA-256 OK':'Не подтверждена',d.modelVerified],['Экспериментальный режим',d.experimentalActive?'Включён':'Выключен',true],['Микрофон и модель',d.voiceReady?'Готовы':'Не готовы',d.voiceReady],['Хук',d.hookReady?'Активен':'Не готов',d.hookReady],['Режим',d.testOnly?'Тест без нажатий':d.enabled?'Каст включён':'Каст выключен',true],['Порт',String(d.port),d.serverReady],['Профиль',d.profile,true],['Активные фразы',String(d.activePhrases),true]];
+      if(d.testOnly)rows.push(['Распознано',d.lastTest?.matched.join(' / ')||'Произнеси фразу',true]);
+      for(const [label,value,ok] of rows){const row=document.createElement('div'),v=document.createElement('span');row.className='diag-row';v.className=ok?'oktext':'warntext';v.textContent=value;row.append(document.createTextNode(label),v);host.append(row);}
+    }catch(e){$('#diagnostics').textContent='Диагностика недоступна: '+e.message;}
+  }
+  $('#refreshReport').onclick=refreshDiagnostics;
+  $('#copyReport').onclick=async()=>{try{if(!report)await refreshDiagnostics();if(!report)throw Error('Нет отчёта');const {lastTest,...safe}=report;await navigator.clipboard.writeText(JSON.stringify(safe,null,2));status('Отчёт скопирован','ok');}catch(e){status(e.message,'bad');}};
+  refreshDiagnostics();setInterval(refreshDiagnostics,2000);
   function collect() {
     return {
       keys: state.keys,
+      disabledPhrases: selectedExclusions(),
+      experimentalFrames: $('#experimentalFrames').checked,
+      testOnly: $('#testOnly').checked,
+      slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value},
       voiceChatKey: state.voice,
       castMode: document.querySelector('input[name=castMode]:checked')?.value,
       listen: document.querySelector('input[name=listen]:checked')?.value,
@@ -322,6 +373,11 @@
     pick('castMode', c.castMode);
     pick('listen', c.listen);
     for (const n of c.blockKeys) pick('block', n);
+    buildPhrases(c);
+    $('#experimentalFrames').checked=c.experimentalFrames;
+    $('#testOnly').checked=c.testOnly;
+    $('#slot1Mode').value=c.slotCastModes?.slot1||'';
+    $('#slot2Mode').value=c.slotCastModes?.slot2||'';
     initMic(c.microphone || '');
     build();
     render();

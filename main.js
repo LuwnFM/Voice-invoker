@@ -94,6 +94,8 @@ const config = {
   debugSteps: false,
 };
 const EXTRA_PHRASES = require('./extra-phrases.json');
+const { catalog, exclusions, enabledPhrases } = require('./phrase-preferences');
+const { experimentalModel } = require('./experimental-model');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 let userConfig = {};
 try {
@@ -115,16 +117,14 @@ const RU_URL = `https://alphacephei.com/vosk/models/${RU_NAME}.zip`;
 let RU_PATH = path.join(MODEL_DIR, RU_NAME + '.tar.gz');
 const phraseToSpell = {};
 const skipped = [];
+const allPhrases = catalog(config.phrases, EXTRA_PHRASES);
+let modelInfo = { active: false, reason: 'initializing' }, experimental = null;
+let voiceInfo = {ready:false, message:''}, lastTest = null;
+const testOnly = config.testOnly === true;
 
 // Build the command set only after the local/downloaded model has been selected.
 function configurePhrases(useExpanded) {
-  for (const [suffix, extra] of Object.entries(EXTRA_PHRASES)) {
-    const id = 'invoker_' + suffix;
-    config.phrases[id] = [...new Set([...(config.phrases[id] || []), ...extra.ready, ...(useExpanded ? extra.pending : [])])];
-    // These short aliases were retired; also remove them from older saved configurations.
-    const retired = suffix === 'sun_strike' ? ['сан'] : suffix === 'cataclysm' ? ['ката', 'катак'] : [];
-    config.phrases[id] = config.phrases[id].filter((phrase) => !retired.includes(phrase.trim().toLowerCase()) && (useExpanded || !extra.pending.includes(phrase.trim().toLowerCase())));
-  }
+  config.phrases = enabledPhrases(allPhrases, exclusions(config.disabledPhrases, allPhrases), EXTRA_PHRASES, useExpanded);
   const isRussian = (phrase) => /[а-яё]/i.test(phrase);
   // Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
   for (const s of SPELLS) {
@@ -138,6 +138,7 @@ function configurePhrases(useExpanded) {
 // Лог идёт в консоль и в файл log.txt (перезаписывается при каждом запуске)
 const LOG_FILE = path.join(__dirname, 'log.txt');
 try {
+  if (fs.existsSync(LOG_FILE)) fs.copyFileSync(LOG_FILE, path.join(__dirname, 'log.previous.txt'));
   fs.writeFileSync(LOG_FILE, '');
 } catch {}
 function log(...a) {
@@ -504,6 +505,11 @@ function settingsData() {
     listen: config.listen,
     blockKeys: config.blockKeys || [],
     microphone: config.microphone || '',
+    phraseCatalog: allPhrases,
+    disabledPhrases: exclusions(userConfig.disabledPhrases, allPhrases),
+    experimentalFrames: userConfig.experimentalFrames === true,
+    testOnly: userConfig.testOnly === true,
+    slotCastModes: userConfig.slotCastModes || {},
   };
 }
 
@@ -519,11 +525,27 @@ function saveSettings(body) {
   if (['hold', 'always'].includes(body.listen)) out.listen = body.listen;
   if (typeof body.microphone === 'string') out.microphone = body.microphone.slice(0, 200);
   if (Array.isArray(body.blockKeys)) out.blockKeys = body.blockKeys.filter((n) => KEY_NAMES.includes(n));
+  if (body.disabledPhrases !== undefined) out.disabledPhrases = exclusions(body.disabledPhrases, allPhrases);
+  if (typeof body.experimentalFrames === 'boolean') out.experimentalFrames = body.experimentalFrames;
+  if (typeof body.testOnly === 'boolean') out.testOnly = body.testOnly;
+  if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2'].includes(k)&&['click','quickcast'].includes(v)));
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n');
   userConfig = out;
   log('Настройки сохранены в config.json');
 }
 
+function diagnostics() {
+  let installed = false, cfgMatches = false;
+  try {
+    const record = JSON.parse(fs.readFileSync(path.join(__dirname,'.dota-install.json'),'utf8').replace(/^\uFEFF/,''));
+    installed = fs.existsSync(record.target);
+    if (installed) {
+      const raw=fs.readFileSync(record.target,'utf8');
+      cfgMatches=raw.includes('http://127.0.0.1:'+config.port+'/gsi')&&raw.includes('"'+config.authToken+'"');
+    }
+  } catch {}
+  return {version:require('./package.json').version, gsiInstalled:installed, gsiConfigMatches:cfgMatches, gsiAgeMs:gsi?Date.now()-gsi.at:null, hero:gsi?.hero||null, modelVerified:modelInfo.active, experimentalActive:!!experimental, voiceReady:voiceInfo.ready, hookReady:!!hookThreadId, enabled:!!last?.state.enabled, profile:last?.state.timingProfile||config.timingProfile, port:config.port, serverReady, testOnly, lastTest, activePhrases:Object.keys(phraseToSpell).length};
+}
 let settingsWin = null;
 function openSettings() {
   if (shutdown || !serverReady) return;
@@ -564,6 +586,10 @@ const server = http.createServer(async (req, res) => {
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
   if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
   if (p === '/settings') return sendFile(res, path.join(__dirname, 'settings.html'), 'text/html; charset=utf-8');
+  if (p === '/diagnostics' && req.method === 'GET') {
+    res.writeHead(200, {'Content-Type':'application/json','Cache-Control':'no-store'});
+    return res.end(JSON.stringify(diagnostics()));
+  }
   if (p === '/config' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(settingsData()));
@@ -601,6 +627,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/voice') {
     if (shutdown) return done();
     const { text, texts } = await readJson(req);
+    if (testOnly) {
+      lastTest = {matched:(Array.isArray(texts)?texts:[text]).map(t=>String(t||'').slice(0,200)).slice(0,20), at:Date.now()};
+      return done();
+    }
     for (const t of Array.isArray(texts) ? texts : [text]) castByPhrase(String(t || '').trim().toLowerCase());
     return done();
   }
@@ -608,6 +638,7 @@ const server = http.createServer(async (req, res) => {
     const { ready, message } = await readJson(req);
     if (message) log('Голос:', message);
     voiceReady = !!ready;
+    voiceInfo = {ready:voiceReady,message:String(message||'')};
     toHook(WM_APP_VOICE_READY, voiceReady ? 1 : 0);
     return done();
   }
@@ -619,7 +650,7 @@ setInterval(() => clients.forEach((res) => res.write(': ping\n\n')), 15000);
 // ---------- Хук клавиатуры ----------
 function startWorker() {
   if (shutdown) return;
-  const worker = hookWorker = new Worker(path.join(__dirname, 'hook-worker.js'), { workerData: { config } });
+  const worker = hookWorker = new Worker(path.join(__dirname, 'hook-worker.js'), { workerData: { config: testOnly ? {...config,blockKeys:[]} : config } });
   worker.on('message', (m) => {
     if (m.type === 'quit-request') return requestShutdown(false);
     if (m.type === 'stopped') {
@@ -688,6 +719,7 @@ function finishShutdown() {
   if (tray && !tray.isDestroyed()) tray.destroy();
   // Wait for the listening socket to close before allowing another process.
   const exit = () => {
+    try { experimental?.cleanup(); } catch(e) { log('Не удалось удалить временную модель:', e.message); }
     if (shutdown.restart && process.env.VI_SUPERVISED !== '1') {
       app.relaunch({ args: [...process.argv.slice(1).filter(a => a !== '--vi-reopen-settings'), '--vi-reopen-settings'] });
     }
@@ -736,6 +768,13 @@ function createWindow() {
     title: 'Voice Invoke',
     webPreferences: { backgroundThrottling: false },
   });
+  let recoveries=0;
+  win.webContents.on('render-process-gone', () => {
+    if(shutdown||win.isDestroyed())return;
+    voiceReady=false; voiceInfo={ready:false,message:'Оверлей завершился'}; toHook(WM_APP_VOICE_READY,0); discardWaiting();
+    if(++recoveries<=3)setTimeout(()=>{if(!shutdown&&!win.isDestroyed())win.reload();},1000);
+    else log('Оверлей неоднократно завершился; требуется перезапуск');
+  });
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setIgnoreMouseEvents(true);
   // Модель сообщает о словах, которых нет в её словаре, — показываем это в консоли
@@ -758,11 +797,15 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   try {
-    const modelSelection = await prepareExpandedModel(MODEL_DIR, userConfig.expandedVocabulary, { log });
+    const modelSelection = modelInfo = await prepareExpandedModel(MODEL_DIR, userConfig.expandedVocabulary, { log });
     if (modelSelection.active) RU_PATH = modelSelection.file;
     configurePhrases(modelSelection.active);
     log('Vosk:', modelSelection.active ? 'Invoker V2 (SHA-256 OK)' : 'stock ru-0.22; expanded model: ' + modelSelection.reason);
     await ensureModel();
+    if (config.experimentalFrames === true && modelSelection.active) {
+      try { experimental=experimentalModel(RU_PATH); RU_PATH=experimental.file; log('Экспериментальная модель: frames-per-chunk=3'); }
+      catch(e) { log('Экспериментальная модель недоступна, использую обычную V2:',e.message); }
+    }
   } catch (e) {
     log('Не удалось подготовить модель распознавания, голос работать не будет:', e.message);
   }

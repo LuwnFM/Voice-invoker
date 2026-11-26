@@ -409,7 +409,7 @@
   // ---------- Отрисовка состояния ----------
   let wantListening = false;
   function render({ state: s, event, spell, reason, aim }) {
-    wantListening = s.enabled && s.listening;
+    wantListening = s.enabled && (s.listening || s.testOnly);
     if (VOICE) {
       if (wantListening) startListening();
       else stopListening();

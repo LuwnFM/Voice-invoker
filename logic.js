@@ -52,6 +52,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
   const s = {
     enabled: true,
     timingProfile: normalizeProfile(config.timingProfile),
+    testOnly: config.testOnly === true,
     voiceReady: false,  // модель и микрофон готовы
     listening: always,  // сейчас слушаем микрофон
     chat: false,        // открыт чат Dota (Enter переключает)
@@ -152,7 +153,8 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
       key(slot, timing.altDelayMs);
       steps.push({ type: 'up', vk: VK_ALT[1], wait: timing.altDelayMs });
     } else key(slot, wait);
-    if (config.castMode === 'click' && spell.target) steps.push({ type: 'click', wait: timing.clickDelayMs });
+    const slotMode = config.slotCastModes?.[action === ACTION.SLOT2 ? 'slot2' : 'slot1'] || config.castMode;
+    if (slotMode === 'click' && spell.target) steps.push({ type: 'click', wait: timing.clickDelayMs });
 
     return steps;
   }
