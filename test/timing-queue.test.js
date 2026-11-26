@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const SPELLS = require('../spells');
 const { ACTION } = require('../logic');
-const { NORMAL, getTiming, normalizeProfile, encodeCast, decodeCast } = require('../timing-profiles');
+const { NORMAL, getTiming, normalizeProfile, encodeCast, decodeCast, MAX_CAST_ID } = require('../timing-profiles');
 
 function harness(withGsi = false) {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
@@ -16,7 +16,7 @@ function harness(withGsi = false) {
   const requests=[], timers=new Map(), events=[];
   let timerId=0;
   const ctx=vm.createContext({
-    SPELLS, ACTION, getTiming, normalizeProfile, encodeCast, WM_APP_CAST:0x8006,
+    SPELLS, ACTION, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
     config:{...NORMAL,slotWaitMs:1500,timingProfile:'normal'},
     last:{state:{enabled:true,timingProfile:'normal'}},
     gsi:withGsi?{at:now,slots:[],abilities:{}}:null,
@@ -69,4 +69,16 @@ test('lost completion fails closed until original request responds',()=>{
   const watchdog=[...h.timers.values()][0];watchdog.fn();
   h.api.castByPhrase('b');assert.equal(h.requests.length,1);
   h.ack(h.requests[0]);assert.equal(h.api.getActive(),null);
+});
+
+test('turbo snapshot persists across GSI, then next command uses newly selected profile',()=>{
+  const h=harness(true);
+  h.ctx.last.state.timingProfile='turbo';
+  h.api.castByPhrase('a');h.api.castByPhrase('b');
+  const req=h.requests[0];assert.equal(req.profile,'turbo');
+  h.ctx.last.state.timingProfile='normal';
+  h.advance(50);h.ctx.gsi={at:1050,slots:[SPELLS[0].id],abilities:{}};
+  h.ack(req);assert.equal(h.requests[1].profile,'turbo');
+  h.ack(h.requests[1]);h.advance(9);h.api.pump();assert.equal(h.requests.length,2);
+  h.advance(1);h.api.pump();assert.equal(h.requests.length,3);assert.equal(h.requests[2].profile,'normal');
 });

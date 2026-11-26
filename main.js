@@ -10,7 +10,7 @@ const { execFileSync } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
 const { ACTION, vkOf } = require('./logic');
-const { normalizeProfile, getTiming, encodeCast } = require('./timing-profiles');
+const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_CAST } = require('./messages');
 
 const config = {
@@ -252,7 +252,7 @@ const QUEUE_TTL_MS = 3000; // слишком долго ждавшие кома�
 // Only one request can be in flight; no estimated completion from nominal waits.
 function dispatchCast(spell, action, profile) {
   if (activeCast) return false;
-  castRequestId = castRequestId % 0x7ffffff + 1;
+  castRequestId = castRequestId % MAX_CAST_ID + 1;
   const id = castRequestId;
   if (!toHook(WM_APP_CAST, SPELLS.indexOf(spell) + 1, encodeCast(action, profile, id))) return false;
   activeCast = { id, spell, action, profile, timedOut: false };
@@ -584,7 +584,7 @@ function startWorker() {
       last = { state: m.state };
       if (!m.state.enabled) discardWaiting();
       broadcast({ ...last, event: m.event });
-      if (m.event === 'profile') log('Режим задержек:', m.state.timingProfile === 'fast' ? 'ускоренный' : 'обычный');
+      if (m.event === 'profile') log('Режим задержек:', profileLabel(m.state.timingProfile));
       if (m.event === 'blocked') log('Клавиша заблокирована: способности только голосом');
       if (m.event === 'toggle') log(m.state.enabled ? 'Голосовой каст ВКЛЮЧЁН' : 'Голосовой каст ВЫКЛЮЧЕН');
     }
@@ -658,7 +658,7 @@ app.whenReady().then(async () => {
     log(config.listen === 'always' || !config.voiceChatKey
       ? 'Слушаю микрофон постоянно'
       : `Слушаю, пока зажата клавиша голосового чата ${String(config.voiceChatKey).toUpperCase()}`);
-    log('Ctrl+Shift+F7 — вкл/выкл, Ctrl+Shift+F8 — выход, Ctrl+Shift+F9 — настройки клавиш, Ctrl+Shift+F10 — обычный режим, Ctrl+Shift+F11 — ускоренный');
+    log('Ctrl+Shift+F7 — вкл/выкл, Ctrl+Shift+F8 — выход, Ctrl+Shift+F9 — настройки клавиш, Ctrl+Shift+F10 — обычный режим, Ctrl+Shift+F11 — ускоренный, Ctrl+Shift+F12 — турбо');
     startWorker();
     createWindow();
     if (firstRun) openSettings();

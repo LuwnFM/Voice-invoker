@@ -18,6 +18,7 @@ const ACTION = { SLOT1: 1, SLOT2: 2, INVOKE: 3, PREPARE: 4 };
 const VK_F9 = 0x78;
 const VK_F10 = 0x79;
 const VK_F11 = 0x7a;
+const VK_F12 = 0x7b;
 
 const NAMED_KEYS = {
   TAB: 0x09, SPACE: 0x20, CAPSLOCK: 0x14, BACKSPACE: 0x08,
@@ -84,7 +85,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
     const repeat = down.has(vk);
     down.add(vk);
 
-    if (held(VK_CTRL) && held(VK_SHIFT) && ([VK_F7, VK_F8, VK_F9, VK_F10, VK_F11].includes(vk))) {
+    if (held(VK_CTRL) && held(VK_SHIFT) && ([VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12].includes(vk))) {
       if (repeat) return swallow(vk);
       if (vk === VK_F8) {
         quit();
@@ -94,8 +95,8 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
         openSettings();
         return swallow(vk);
       }
-      if (vk === VK_F10 || vk === VK_F11) {
-        s.timingProfile = vk === VK_F11 ? 'fast' : 'normal';
+      if (vk === VK_F10 || vk === VK_F11 || vk === VK_F12) {
+        s.timingProfile = vk === VK_F12 ? 'turbo' : vk === VK_F11 ? 'fast' : 'normal';
         s.enabled = true;
         send('profile');
         return swallow(vk);

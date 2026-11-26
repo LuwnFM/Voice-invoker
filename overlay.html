@@ -439,7 +439,8 @@
       keyClick({ vol: 0.18, tone: 0.6 });
     }
     if (event === 'profile') {
-      toast(s.timingProfile === 'fast' ? 'Ускоренный режим' : 'Обычный режим', s.timingProfile === 'fast' ? '#ff9a2e' : '#6fbf45', 1800);
+      const label = { normal: 'Обычный режим', fast: 'Ускоренный режим', turbo: 'Турбо-режим' }[s.timingProfile] || 'Обычный режим';
+      toast(label, s.timingProfile === 'turbo' ? '#e0463a' : s.timingProfile === 'fast' ? '#ff9a2e' : '#6fbf45', 1800);
     }
     if (event === 'toggle') {
       toast(s.enabled ? 'Голосовой каст ВКЛ' : 'Голосовой каст ВЫКЛ', s.enabled ? '#6fbf45' : '#7d8a94');
