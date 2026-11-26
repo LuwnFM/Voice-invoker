@@ -1,9 +1,6 @@
 name: JavaScript quality audit
 on:
-  push:
-    branches: [main, rc7-diagnostics-controls]
-  pull_request:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,8 +24,8 @@ jobs:
       - name: Extract browser scripts
         run: node scripts/extract-inline.js
       - name: ESLint correctness checks
-        run: node .quality-tools/node_modules/eslint/bin/eslint.js . .quality-html/*.js --format stylish
-      - name: TypeScript checkJs (full project baseline)
+        run: node .quality-tools/node_modules/eslint/bin/eslint.js . .quality-html/*.js --format stylish --max-warnings 0
+      - name: TypeScript checkJs (full project)
         shell: bash
         run: |
           set +e
@@ -37,8 +34,9 @@ jobs:
           cat typecheck-report.txt
           echo "TypeScript exit: $code"
           echo "TypeScript diagnostic count: $(grep -c 'error TS' typecheck-report.txt || true)"
-          if [[ "$code" -ne 0 ]]; then echo "::warning::Legacy JavaScript type diagnostics remain; see artifact."; fi
+          exit "$code"
       - name: Unit and integration tests with coverage
+        if: always()
         run: node --experimental-test-coverage --test
       - uses: actions/upload-artifact@v4
         if: always()

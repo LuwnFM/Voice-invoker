@@ -8,7 +8,7 @@ function resolveCommands(base, extra, preferences, words, expanded, {strict=true
   const disabled=exclusions(preferences.disabledPhrases,shown);
   const reservedBase=enabledPhrases(base,disabled,extra,true);
   const custom=validatePhrases(preferences.customSpellPhrases,words,reservedBase,{
-    strict,targets:SPELLS,excluded:disabled,ownCatalog:base
+    strict,targets:SPELLS.map(({id,name})=>({id,name})),excluded:disabled,ownCatalog:base
   });
   const all=mergeCatalog(base,custom.phrases);
   const reserved=enabledPhrases(all,disabled,extra,true);

@@ -7,6 +7,7 @@ function verifyBytes(bytes, expected) {
   return bytes.length === expected.size && crypto.createHash('sha256').update(bytes).digest('hex') === expected.sha256;
 }
 
+/** @param {string} modelDir @param {boolean|undefined} enabled @param {{filename:string,size:number,sha256:string}} [expected] */
 function selectExpandedModel(modelDir, enabled, expected = manifest) {
   const file = path.join(modelDir, expected.filename);
   if (enabled === false) return { file, active: false, reason: 'disabled' };
@@ -21,6 +22,7 @@ function selectExpandedModel(modelDir, enabled, expected = manifest) {
   }
 }
 // Download only once, and never replace a local archive with unverified bytes.
+/** @param {string} modelDir @param {boolean|undefined} enabled @param {{expected?:{filename:string,size:number,sha256:string,downloadUrl:string},fetchImpl?:typeof fetch,log?:(...messages:string[])=>void}} [options] */
 async function prepareExpandedModel(modelDir, enabled, { expected = manifest, fetchImpl = globalThis.fetch, log = (...messages) => {} } = {}) {
   const current = selectExpandedModel(modelDir, enabled, expected);
   if (current.active || enabled === false) return current;

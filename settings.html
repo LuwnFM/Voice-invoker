@@ -332,7 +332,7 @@
       }
       for(const phrase of phrases)addPhrase(phrase);
       for(const phrase of c.customSpellPhrases?.[id]||[]){if(typeof phrase==='string'&&!boxes.some(b=>b.dataset.phrase===normalize(phrase)))addPhrase(normalize(phrase),true);}
-      for(const [name,on] of [['Включить все',true],['Отключить все',false]]) {
+      for(const [name,on] of /** @type {[string,boolean][]} */ ([['Включить все',true],['Отключить все',false]])) {
         const button=document.createElement('button');button.textContent=name;button.onclick=()=>{boxes.forEach(b=>b.checked=on);update();status('Есть несохранённые изменения');};actions.append(button);
       }
       const addRow=document.createElement('div'),input=document.createElement('input'),add=document.createElement('button');

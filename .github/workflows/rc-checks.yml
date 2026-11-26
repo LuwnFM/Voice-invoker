@@ -8,6 +8,8 @@ on:
 permissions:
   contents: read
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
   windows:
     runs-on: windows-latest
     strategy:
@@ -85,7 +87,7 @@ jobs:
 
   publish-rc:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: windows
+    needs: [windows, quality]
     runs-on: ubuntu-latest
     permissions:
       contents: write

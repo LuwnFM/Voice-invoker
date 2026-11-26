@@ -9,7 +9,7 @@ const exe=packaged?path.resolve(root,'..','..','VoiceInvoker.exe'):path.join(roo
 const launcher=packaged?exe:process.execPath;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(),'vi-lifecycle-'));
 const config = path.join(root,'config.json');
-const original = fs.readFileSync(config);
+const original = fs.readFileSync(config,'utf8');
 const base = 'http://127.0.0.1:3055';
 /** @type {NodeJS.ProcessEnv} */
 const env = {...process.env, VI_LIFECYCLE_DIR:dir, VI_EXE:exe};

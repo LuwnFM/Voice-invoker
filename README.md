@@ -208,4 +208,6 @@ SHA-256: `dcba103f27b209415fae50065d420ab59f171bff7da047f60f3801c09de8ba90`.
 
 ### Проверка перед релизом
 
-Аналоги Ruff / mypy / pytest: ESLint (ошибки корректности и предупреждения), TypeScript `checkJs` (полный отчёт по JavaScript, пока не блокирует сборку из-за старых нетипизированных модулей), `node:test` с покрытием. CI выполняет проверки на Node.js 22 и 26. Локально: `npm ci`, `npm install --prefix .quality-tools --no-package-lock --ignore-scripts eslint@9.39.1 typescript@5.9.3`, `npm run quality:prepare`, `npm run lint`, `npm run typecheck`, `npm run coverage`. Для Windows также проверяются нативные хуки и реальный NSIS-установщик (установка, обновление, восстановление GSI и удаление в тестовой папке).
+Аналоги Ruff / mypy / pytest: ESLint (ошибки корректности и предупреждения), TypeScript `checkJs` (проверка JavaScript и встроенных HTML-скриптов, без миграции на TypeScript), `node:test` с покрытием. CI выполняет проверки на Node.js 22 и 26. Локально: `npm ci`, `npm install --prefix .quality-tools --no-package-lock --ignore-scripts eslint@9.39.1 typescript@5.9.3`, `npm run quality:prepare`, `npm run lint`, `npm run typecheck`, `npm run coverage`. Для Windows также проверяются нативные хуки и реальный NSIS-установщик (установка, обновление, восстановление GSI и удаление в тестовой папке).
+
+Публикация RC требует успешных ESLint (без предупреждений), checkJs, тестов и сборок Windows. Типизация работает в совместимом с текущим JavaScript режиме (`strict: false`), а не в режиме строгого TypeScript.
