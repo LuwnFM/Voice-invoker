@@ -171,7 +171,12 @@ function runSequence() {
       count = keyEdge(step.vk, step.type === 'up');
       if (count === 1 && step.vk === 0xa4) altHeld = step.type === 'down';
     } else count = pressKey(step.vk);
-    if (count !== (step.type === 'down' || step.type === 'up' ? 1 : 2)) return finishSequence(false, 'SendInput failed');
+    if (count !== (step.type === 'down' || step.type === 'up' ? 1 : 2)) {
+      // A partial down/up pair must not leave a key held.
+      if (count === 1 && step.type === 'key') keyEdge(step.vk, true);
+      if (count === 1 && step.type === 'click') SendMouseInput(1, [mouseInput(MOUSEEVENTF_LEFTUP)], koffi.sizeof(MOUSE_INPUT));
+      return finishSequence(false, 'SendInput failed');
+    }
     seqIdx++;
   }
   finishSequence(true);

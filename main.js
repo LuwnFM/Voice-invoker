@@ -255,24 +255,33 @@ function dispatchCast(spell, action, profile) {
   castRequestId = castRequestId % 0x7ffffff + 1;
   const id = castRequestId;
   if (!toHook(WM_APP_CAST, SPELLS.indexOf(spell) + 1, encodeCast(action, profile, id))) return false;
-  activeCast = { id, spell, action, profile };
+  activeCast = { id, spell, action, profile, timedOut: false };
+  const timing = getTiming(config, profile);
+  // Fail closed if the worker stops responding; do not send another series until it replies.
+  const limit = 5000 + 3 * timing.keyDelayMs + timing.castDelayMs + timing.clickDelayMs + 2 * timing.altDelayMs;
+  activeCast.watchdog = setTimeout(() => {
+    if (activeCast?.id !== id) return;
+    activeCast.timedOut = true;
+    discardWaiting();
+    log('Поток ввода не подтвердил завершение; новые команды остановлены до ответа');
+  }, limit);
   return true;
 }
 
 function handleCastComplete(m) {
   if (!activeCast || m.id !== activeCast.id) return;
   const finished = activeCast;
+  clearTimeout(finished.watchdog);
   activeCast = null;
+  if (finished.timedOut) m = { ...m, ok: false, reason: 'Тайм-аут подтверждения ввода' };
   if (config.debugSteps || !m.ok) log('Каст:', finished.spell.name, m.profile, Math.round(m.elapsedMs) + ' мс', m.ok ? 'OK' : m.reason);
   if (!m.ok) {
-    queue.length = 0;
-    if (awaitingSlot) clearTimeout(awaitingSlot.timer);
-    awaitingSlot = null;
+    discardWaiting();
     predicted = null;
     busyUntil = 0;
     return broadcast({ ...last, event: 'refuse', spell: finished.spell, reason: m.reason || 'Ошибка ввода' });
   }
-  if (finished.action === ACTION.PREPARE && awaitingSlot) {
+  if (finished.action === ACTION.PREPARE && awaitingSlot && last?.state.enabled) {
     awaitingSlot.timer = setTimeout(slotTimeout, config.slotWaitMs);
     checkSlot();
   } else {
@@ -282,10 +291,19 @@ function handleCastComplete(m) {
   pump();
 }
 
+function discardWaiting() {
+  queue.length = 0;
+  if (awaitingSlot) clearTimeout(awaitingSlot.timer);
+  awaitingSlot = null;
+  clearTimeout(pumpTimer);
+  pumpTimer = null;
+  gsiWaitUntil = 0;
+}
+
 function castByPhrase(phrase) {
   const spell = SPELLS.find((s) => s.id === phraseToSpell[phrase]);
   if (!spell) return;
-  if (!last || !last.state.enabled) return;
+  if (!last || !last.state.enabled || activeCast?.timedOut) return;
   // Одну и ту же фразу могут услышать обе модели — второй раз не кастуем
   if (lastQueued.id === spell.id && Date.now() - lastQueued.at < 2500) return;
   lastQueued = { id: spell.id, at: Date.now() };
@@ -297,6 +315,7 @@ function castByPhrase(phrase) {
 function pump() {
   clearTimeout(pumpTimer);
   pumpTimer = null;
+  if (!last?.state.enabled) { discardWaiting(); return; }
   while (queue.length && !awaitingSlot && !activeCast) {
     const now = Date.now();
     if (now < busyUntil) {
@@ -348,7 +367,7 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
 let awaitingSlot = null; // { spell, phrase, from, timer }
 
 function checkSlot() {
-  if (!awaitingSlot || activeCast || !gsi) return;
+  if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled) return;
   const { spell, phrase, from, timer, profile } = awaitingSlot;
   if (gsi.at < from) return;
   const id = spell.base || spell.id;
@@ -357,7 +376,10 @@ function checkSlot() {
   clearTimeout(timer);
   awaitingSlot = null;
   const own = gsi.abilities[id];
-  if (own && own.cooldown > 0) return cast(spell, phrase, { refuse: `${spell.name} на перезарядке (${Math.ceil(own.cooldown)} сек)` });
+  if (own && own.cooldown > 0) {
+    cast(spell, phrase, { refuse: `${spell.name} на перезарядке (${Math.ceil(own.cooldown)} сек)` });
+    return pump();
+  }
   press(spell, phrase, slot === 1 ? ACTION.SLOT2 : ACTION.SLOT1, `в слоте ${slot + 1} через ${Date.now() - from} мс`, profile);
 }
 
@@ -560,6 +582,7 @@ function startWorker() {
     }
     if (m.type === 'state') {
       last = { state: m.state };
+      if (!m.state.enabled) discardWaiting();
       broadcast({ ...last, event: m.event });
       if (m.event === 'profile') log('Режим задержек:', m.state.timingProfile === 'fast' ? 'ускоренный' : 'обычный');
       if (m.event === 'blocked') log('Клавиша заблокирована: способности только голосом');
