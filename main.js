@@ -28,6 +28,7 @@ const { importBindings } = require('./dota-bindings');
 const { processStatus } = require('./diagnostics');
 const { allowedHost, allowedOrigin, jsonContentType, readJson } = require('./local-http');
 const { validateKeys } = require('./key-validation');
+const { saveJsonAtomic } = require('./config-storage');
 const { ACTION, vkOf } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
@@ -556,7 +557,7 @@ function saveSettings(body) {
   out.itemPhrases=commands.itemPhrases;
   out.disabledPhrases=commands.disabledPhrases;
   delete out.itemCastModes;
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n');
+  saveJsonAtomic(CONFIG_FILE, out);
   userConfig = out;
   log('Настройки сохранены в config.json');
 }
@@ -655,13 +656,13 @@ async function handleRequest(req,res){
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
   if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
   if (p === '/settings') return sendFile(res, path.join(__dirname, 'settings.html'), 'text/html; charset=utf-8');
-  if (p === '/repair-gsi' && req.method === 'POST' && String(req.headers['content-type']||'').startsWith('application/json')) {
+  if (p === '/repair-gsi' && req.method === 'POST') {
     res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify(await repairGsi()));
   }
-  if (p === '/open-logs' && req.method === 'POST' && String(req.headers['content-type']||'').startsWith('application/json')) {
+  if (p === '/open-logs' && req.method === 'POST') {
     await shell.openPath(__dirname);return done();
   }
-  if (p === '/import-bindings' && req.method === 'POST' && String(req.headers['content-type']||'').startsWith('application/json')) {
+  if (p === '/import-bindings' && req.method === 'POST') {
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
     try {return res.end(JSON.stringify({ok:true,...importBindings()}));} catch(e){return res.end(JSON.stringify({ok:false,error:String(e.message).slice(0,180)}));}
   }
@@ -680,17 +681,14 @@ async function handleRequest(req,res){
   }
   // Только application/json: чужая страница в браузере не сможет отправить такой запрос без CORS
   if (req.method === 'POST' && (p === '/config' || p === '/restart')) {
-    if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
-      res.writeHead(415);
-      return res.end();
-    }
     if (p === '/restart') {
       done();
       log('Перезапуск с новыми настройками...');
       return requestShutdown(true);
     }
+    const body = await readJson(req);
     try {
-      saveSettings(await readJson(req));
+      saveSettings(body);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end('{"ok":true}');
     } catch (e) {
