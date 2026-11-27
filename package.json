@@ -1,23 +1,31 @@
 {
   "name": "voice-invoke",
-  "version": "1.1.0-rc.6",
+  "version": "1.1.1",
   "description": "Перед Invoke нужно произнести название способности вслух — клавиши Dota блокируются, пока не скажешь верно",
   "main": "main.js",
   "private": true,
   "scripts": {
     "start": "node scripts/launch.js",
     "test": "node --test",
-    "check:runtime": "node scripts/ensure-runtime.js"
+    "check:runtime": "node scripts/ensure-runtime.js",
+    "lint": "node .quality-tools/node_modules/eslint/bin/eslint.js . .quality-html/*.js",
+    "typecheck": "node .quality-tools/node_modules/typescript/bin/tsc -p jsconfig.json",
+    "coverage": "node --experimental-test-coverage --test",
+    "quality:prepare": "node scripts/extract-inline.js"
   },
   "dependencies": {
     "koffi": "^2.9.0",
     "vosk-browser": "^0.0.8"
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "45.5.0"
   },
   "allowScripts": {
-    "electron@38.8.6": true,
     "koffi@2.16.3": true
+  },
+  "overrides": {
+    "vosk-browser": {
+      "uuid": "11.1.1"
+    }
   }
 }

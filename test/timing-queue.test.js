@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const SPELLS = require('../spells');
-const { ACTION } = require('../logic');
+const { ACTION, createVoiceCast, vkOf } = require('../logic');
 const { decodeVoiceCommand } = require('../phrase-parser');
 const { NORMAL, getTiming, normalizeProfile, encodeCast, decodeCast, MAX_CAST_ID } = require('../timing-profiles');
 
@@ -19,7 +19,7 @@ function harness(withGsi = false, realPlan = false) {
   const ctx=vm.createContext({
     SPELLS, ACTION, decodeVoiceCommand, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
     config:{...NORMAL,slotWaitMs:1500,timingProfile:'normal'},
-    last:{state:{enabled:true,timingProfile:'normal'}},
+    last:{state:{enabled:true,voiceReady:true,timingProfile:'normal'}},
     gsi:withGsi?{at:now,hero:'npc_dota_hero_invoker',alive:true,slots:[],abilities:{}}:null,
     gsiWarned:false,
     predicted:null, prediction:()=>ctx.predicted,
@@ -54,7 +54,7 @@ test('split Invoke preserves original profile despite hotkey switch and waits fo
   const req=h.requests[0];assert.equal(req.action,ACTION.PREPARE);
   h.ctx.last.state.timingProfile='fast';
   h.advance(50);
-  h.ctx.gsi={at:1050,slots:[SPELLS[0].id],abilities:{}};
+  h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};
   h.api.checkSlot();assert.equal(h.requests.length,1);
   h.ack(req);assert.equal(h.requests.length,2);
   assert.equal(h.requests[1].action,ACTION.SLOT1);
@@ -64,7 +64,7 @@ test('failed sequence or disabled mode drops queued actions',()=>{
   const h=harness();h.api.castByPhrase('a');h.api.castByPhrase('b');h.ack(h.requests[0],false);
   h.advance(1000);h.api.pump();assert.equal(h.requests.length,1);
   const g=harness(true);g.api.castByPhrase('a');g.ctx.last.state.enabled=false;g.api.discardWaiting();g.ack(g.requests[0]);
-  g.ctx.gsi={at:1100,slots:[SPELLS[0].id],abilities:{}};g.api.checkSlot();assert.equal(g.requests.length,1);
+  g.ctx.gsi={at:1100,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};g.api.checkSlot();assert.equal(g.requests.length,1);
 });
 test('lost completion fails closed until original request responds',()=>{
   const h=harness();h.api.castByPhrase('a');
@@ -79,7 +79,7 @@ test('turbo snapshot persists across GSI, then next command uses newly selected 
   h.api.castByPhrase('a');h.api.castByPhrase('b');
   const req=h.requests[0];assert.equal(req.profile,'turbo');
   h.ctx.last.state.timingProfile='normal';
-  h.advance(50);h.ctx.gsi={at:1050,slots:[SPELLS[0].id],abilities:{}};
+  h.advance(50);h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};
   h.ack(req);assert.equal(h.requests[1].profile,'turbo');
   h.ack(h.requests[1]);h.advance(9);h.api.pump();assert.equal(h.requests.length,2);
   h.advance(1);h.api.pump();assert.equal(h.requests.length,3);assert.equal(h.requests[2].profile,'normal');
@@ -108,4 +108,28 @@ test('voice preparation is integrated into every existing timing profile',()=>{
     h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{}};
     h.api.checkSlot();assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'prepared');
   }
+});
+
+test('after Invoke, changed hero state or disabled ability prevents slot input',()=>{
+ for(const changed of [{alive:false},{hero:'npc_dota_hero_axe'},{abilities:{[SPELLS[0].id]:{cooldown:0,can_cast:false}}}]){
+  const h=harness(true,true);h.api.castByPhrase('a');h.ack(h.requests[0]);h.advance(50);
+  h.ctx.gsi={at:1050,hero:'npc_dota_hero_invoker',alive:true,slots:[SPELLS[0].id],abilities:{},...changed};
+  h.api.checkSlot();assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'refuse');
+ }
+});
+
+test('microphone loss drops queued casts',()=>{const h=harness();h.api.castByPhrase('a');h.api.castByPhrase('b');h.ctx.last.state.voiceReady=false;h.ack(h.requests[0]);h.advance(1000);h.api.pump();assert.equal(h.requests.length,1);h.api.castByPhrase('b');assert.equal(h.requests.length,1);});
+
+// Real PTT state changes wired into the queue harness: unlisten must not cancel.
+test('hold-to-talk release and re-press preserve a queued combo in every profile',()=>{
+ for(const profile of ['normal','fast','turbo']){
+  const h=harness();
+  const voice=createVoiceCast({keys:{quas:'Q',wex:'W',exort:'E',invoke:'R',slot1:'D',slot2:'F'},voiceChatKey:'G',listen:'hold',timingProfile:profile},{isGameActive:()=>true,emit:message=>{h.ctx.last=message;if(!message.state.enabled||!message.state.voiceReady)h.api.discardWaiting();},quit(){}});
+  voice.setVoiceReady(true);
+  voice.handleKey(vkOf('G'),true);h.api.castByPhrase('a');assert.equal(h.requests.length,1);
+  voice.handleKey(vkOf('G'),false);assert.equal(voice.state.listening,false);assert.equal(voice.state.enabled,true);
+  voice.handleKey(vkOf('G'),true);h.api.castByPhrase('b');voice.handleKey(vkOf('G'),false);
+  assert.equal(h.requests.length,1);h.ack(h.requests[0]);h.advance(100);h.api.pump();
+  assert.equal(h.requests.length,2);assert.equal(h.requests[1].profile,profile);assert.equal(voice.state.listening,false);
+ }
 });

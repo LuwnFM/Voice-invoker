@@ -1,20 +1,25 @@
 name: RC checks
 on:
   push:
-    branches: [main, voice-dictionary-setup, rc2-model-download, timing-profiles, prepare-prefixes, rc5-install-lifecycle, rc6-instance-lifecycle]
+    branches: [main, voice-dictionary-setup, rc2-model-download, timing-profiles, prepare-prefixes, rc5-install-lifecycle, rc6-instance-lifecycle, rc7-diagnostics-controls]
   pull_request:
     branches: [main]
   workflow_dispatch:
+concurrency:
+  group: rc-checks-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 permissions:
   contents: read
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
   windows:
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         node: ['22', '26']
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,9 +33,8 @@ jobs:
         run: |
           node -e "const r=require('node:child_process').spawnSync('node_modules/electron/dist/electron.exe',['scripts/hook-smoke.js'],{env:{...process.env,ELECTRON_RUN_AS_NODE:'1'},stdio:'inherit',timeout:60000});if(r.error)console.error(r.error);process.exit(r.status===0?0:1)"
           if ($LASTEXITCODE -ne 0) { throw 'Native hook smoke test failed' }
-      - name: Dependency audit (report only)
-        run: npm audit --json
-        continue-on-error: true
+      - name: Dependency audit (moderate or higher blocks release)
+        run: npm audit --audit-level=moderate
       - run: npm test
       - name: Check application JavaScript and inline scripts
         shell: pwsh
@@ -46,8 +50,10 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'setup-dota.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count) { $errors | Format-List; throw 'Invalid installer syntax' }
+          foreach ($script in @(Get-ChildItem -Path . -File -Filter *.ps1) + @(Get-ChildItem -Path scripts -File -Filter *.ps1)) {
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | Format-List; throw "Invalid syntax: $script" }
+          }
       - name: Check installed dependencies
         run: npm ls --depth=0
 
@@ -55,17 +61,33 @@ jobs:
         run: node scripts/fetch-model.js model
       - name: Full Electron lifecycle check
         run: node scripts/lifecycle-check.js
+      - name: Compile single NSIS installer
+        if: matrix.node == '22'
+        shell: powershell
+        run: |
+          if (-not (Test-Path (Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'NSIS\makensis.exe'))) {
+            choco install nsis --version=3.11 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          }
+          .\scripts\build-windows.ps1 -Installer -SkipInstallerSmoke
+      - name: Test installed EXE and launcher without system Node on PATH
+        if: matrix.node == '22'
+        timeout-minutes: 8
+        shell: powershell
+        run: .\scripts\installer-smoke.ps1 -Installer (Get-Item build-output/VoiceInvoker-Setup-1.1.1.exe).FullName
       - uses: actions/upload-artifact@v4
         if: matrix.node == '22'
         with:
-          name: invoker-v2
-          path: model/vosk-model-small-ru-invoker.tar.gz
+          name: windows-packages
+          path: |
+            build-output/VoiceInvoker-Setup-*.exe
+            build-output/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 2
+          retention-days: 7
 
   publish-rc:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: windows
+    needs: [windows, quality]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -76,21 +98,27 @@ jobs:
           node-version: '22'
       - uses: actions/download-artifact@v4
         with:
-          name: invoker-v2
-          path: model
-      - name: Verify release model
-        run: node scripts/fetch-model.js model
-      - name: Publish release candidate with model
+          name: windows-packages
+          path: windows-packages
+      - name: Verify Windows package checksums
+        run: cd windows-packages && sha256sum --check SHA256SUMS.txt
+      - name: Publish single Windows installer
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           tag="v$(node -p "require('./package.json').version")"
-          if [[ "$tag" != "v1.1.0-rc.6" ]]; then exit 0; fi
+          if [[ "$tag" != "v1.1.1" ]]; then exit 0; fi
           [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" == "$GITHUB_SHA" ]] || exit 0
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $tag already exists; not overwriting."
             exit 0
           fi
-          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.6" --notes-file RELEASE_NOTES.md
+          installer="windows-packages/VoiceInvoker-Setup-1.1.1.exe"
+          test -f "$installer"
+          cp RELEASE_NOTES.md release-notes.txt
+          printf '\n## SHA-256\n\n```text\n' >> release-notes.txt
+          cat windows-packages/SHA256SUMS.txt >> release-notes.txt
+          printf '```\n' >> release-notes.txt
+          gh release create "$tag" "$installer" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.1 (verification build)" --notes-file release-notes.txt

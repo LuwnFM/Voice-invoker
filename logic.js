@@ -35,7 +35,7 @@ function vkOf(key) {
   const k = String(key || '').toUpperCase().trim();
   if (!k) return 0;
   const f = /^F(\d{1,2})$/.exec(k);
-  if (f && f[1] >= 1 && f[1] <= 24) return 0x70 + Number(f[1]) - 1;
+  if (f && Number(f[1]) >= 1 && Number(f[1]) <= 24) return 0x70 + Number(f[1]) - 1;
   const n = /^NUM(\d)$/.exec(k);
   if (n) return 0x60 + Number(n[1]);
   if (/^[A-Z0-9]$/.test(k)) return k.charCodeAt(0);
@@ -44,14 +44,15 @@ function vkOf(key) {
 
 function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () => {} }) {
   const orbKey = { Q: config.keys.quas, W: config.keys.wex, E: config.keys.exort };
-  const talkVk = vkOf(config.voiceChatKey);
-  const always = config.listen === 'always' || !talkVk;
+  let talkVk = vkOf(config.voiceChatKey);
+  let always = config.listen === 'always' || !talkVk;
   // config.blockKeys — имена из config.keys, например ["invoke"] или ["invoke", "slot1", "slot2"]
   const blockedVk = new Set((config.blockKeys || []).map((name) => vkOf(config.keys[name])).filter(Boolean));
 
   const s = {
     enabled: true,
     timingProfile: normalizeProfile(config.timingProfile),
+    testOnly: config.testOnly === true,
     voiceReady: false,  // модель и микрофон готовы
     listening: always,  // сейчас слушаем микрофон
     chat: false,        // открыт чат Dota (Enter переключает)
@@ -70,6 +71,12 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
     send(on ? 'listen' : 'unlisten');
   }
 
+  function toggle() {
+    s.enabled = !s.enabled;
+    s.chat = false;
+    if (!always) s.listening = false;
+    send('toggle');
+  }
   function setVoiceReady(ready) {
     s.voiceReady = ready;
     send('voice');
@@ -101,10 +108,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
         send('profile');
         return swallow(vk);
       }
-      s.enabled = !s.enabled;
-      s.chat = false;
-      if (!always) s.listening = false;
-      send('toggle');
+      toggle();
       return swallow(vk);
     }
     // Автоповтор уже заблокированной клавиши тоже не пропускаем
@@ -132,7 +136,14 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
   function buildSequence(spell, action, profile = s.timingProfile) {
     const timing = getTiming(config, profile);
     const steps = [];
-    const key = (k, wait) => steps.push({ type: 'key', vk: vkOf(k), wait });
+    if(spell.itemSlot){
+      const vk=vkOf(config.keys?.[spell.key]);
+      if(!vk||![ACTION.SLOT1,ACTION.SLOT2].includes(action))throw Error('Invalid item slot');
+      steps.push({type:'key',vk,wait:0});
+      if(action===ACTION.SLOT1)steps.push({type:'click',wait:timing.clickDelayMs});
+      return steps;
+    }
+    const key = (k, wait) => {const vk=vkOf(k);if(!vk)throw Error('Unassigned cast key');steps.push({ type: 'key', vk, wait });};
     const gap = timing.keyDelayMs;
 
     let slot = config.keys.slot1; // новая способность всегда встаёт в первый слот
@@ -152,12 +163,23 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
       key(slot, timing.altDelayMs);
       steps.push({ type: 'up', vk: VK_ALT[1], wait: timing.altDelayMs });
     } else key(slot, wait);
-    if (config.castMode === 'click' && spell.target) steps.push({ type: 'click', wait: timing.clickDelayMs });
+    const slotMode = config.slotCastModes?.[action === ACTION.SLOT2 ? 'slot2' : 'slot1'] || config.castMode;
+    if (slotMode === 'click' && spell.target) steps.push({ type: 'click', wait: timing.clickDelayMs });
 
     return steps;
   }
 
-  return { handleKey, setVoiceReady, buildSequence, state: s, send };
+  function updateBindings(patch){
+    // Retain held/swallowed keys, chat, enabled state and selected timing profile.
+    Object.assign(config,patch);
+    Object.assign(orbKey,{Q:config.keys.quas,W:config.keys.wex,E:config.keys.exort});
+    talkVk=vkOf(config.voiceChatKey);always=config.listen==='always'||!talkVk;
+    blockedVk.clear();for(const name of config.blockKeys||[]){const vk=vkOf(config.keys[name]);if(vk)blockedVk.add(vk);}
+    s.talkKey=always?'':String(config.voiceChatKey).toUpperCase();
+    s.listening=always;
+    send('bindings');
+  }
+  return { handleKey, setVoiceReady, buildSequence, state: s, send, toggle, updateBindings };
 }
 
 module.exports = { createVoiceCast, vkOf, ACTION };

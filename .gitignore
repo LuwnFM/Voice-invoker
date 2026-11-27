@@ -3,3 +3,11 @@ model/
 log.txt
 .dota-install.json
 .dota-install.json.tmp
+
+build-output/
+launcher.log
+log.previous.txt
+
+.quality-tools/
+.quality-html/
+typecheck-report.txt

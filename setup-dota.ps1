@@ -1,4 +1,4 @@
-param([switch]$Uninstall, [switch]$Launch)
+param([switch]$Uninstall, [switch]$Launch, [switch]$NoPrompt, [string]$DotaPath)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $statePath = Join-Path $root '.dota-install.json'
@@ -65,16 +65,38 @@ if ($Uninstall) {
     Write-Host 'GSI installation removed. Restart Dota if it is running.'
     exit 0
 }
-$steam = Find-Steam
-$dota = Find-Dota $steam
+$steam = $null
+try { $steam = Find-Steam } catch { if ($Launch) { throw } }
+if ($DotaPath) {
+    $manual = $DotaPath.Trim('"')
+    if (-not (Test-Path -LiteralPath (Join-Path $manual 'game\bin\win64\dota2.exe') -PathType Leaf)) { throw 'Invalid Dota 2 folder.' }
+    $dota = (Resolve-Path -LiteralPath $manual).Path
+} else { try { if (-not $steam) { throw 'Steam not found.' }; $dota = Find-Dota $steam } catch {
+    $manual = $null
+    if (Test-Path -LiteralPath $statePath) {
+        try {
+            $saved = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $candidate = [string]$saved.target -replace '[\\/]game[\\/]dota[\\/]cfg[\\/]gamestate_integration[\\/].+$',''
+            if (Test-Path -LiteralPath (Join-Path $candidate 'game\bin\win64\dota2.exe') -PathType Leaf) { $manual = $candidate }
+        } catch {}
+    }
+    if (-not $manual -and $NoPrompt) { throw 'DOTA_NOT_FOUND' }
+    if (-not $manual) { $manual = Read-Host 'Dota 2 not detected. Enter installation folder (contains game) or leave empty to cancel' }
+    if (-not $manual) { throw 'Dota 2 installation not found.' }
+    $manual = $manual.Trim('"')
+    if (-not (Test-Path -LiteralPath (Join-Path $manual 'game\bin\win64\dota2.exe') -PathType Leaf)) { throw 'Invalid Dota 2 folder.' }
+    $dota = (Resolve-Path -LiteralPath $manual).Path
+} }
 $folder = Join-Path $dota 'game\dota\cfg\gamestate_integration'
 $target = Join-Path $folder $cfgName
 $source = Get-Content -LiteralPath (Join-Path $root $cfgName) -Raw
 $port = 3055
 $token = 'voice_invoke'
-$configPath = Join-Path $root 'config.json'
+$dataDir = if ($env:VI_DATA_DIR) { $env:VI_DATA_DIR } else { Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'VoiceInvoker' }
+$configPath = Join-Path $dataDir 'config.json'
+if (-not (Test-Path -LiteralPath $configPath)) { $configPath = Join-Path $root 'config.json' }
 if (Test-Path -LiteralPath $configPath) {
-    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($null -ne $config.port) { $port = [int]$config.port }
     if ($null -ne $config.authToken) { $token = [string]$config.authToken }
 }

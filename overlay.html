@@ -197,11 +197,13 @@
 
   let model;
   let grammar = [];                     // фразы
+  /** @type {(text:string)=>string[]} */
   let parse = () => [];
   let recognitionGate = createRecognitionGate(text => parse(text));
   let lastMeterAt = 0;
   let prerollSamples = 0;
   let audioCtx;
+  let captureReady=false, captureStream=null, captureSource=null, captureNode=null;
   let rec = null;                       // активный распознаватель
   let flushing = [];                    // распознаватели, от которых ждём итог после отпускания клавиши
   let flushTimer = null;
@@ -217,7 +219,7 @@
 
   async function voiceStatus(ready, message) {
     try {
-      await fetch('/voice-status', { method: 'POST', body: JSON.stringify({ ready, message }) });
+      await fetch('/voice-status', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ready, message }) });
     } catch (e) {}
   }
 
@@ -244,6 +246,25 @@
     return { stream, micNote: note };
   }
 
+  // A lost input is not a normal push-to-talk release: never flush pending
+  // recognition results into the cast queue when the device has disappeared.
+  function abortRecognition(){
+    listening=false;
+    const old=rec;rec=null;flushing=[];
+    clearTimeout(flushTimer);flushTimer=null;
+    preroll.length=0;prerollSamples=0;resetUtterance();
+    try{old?.remove();}catch{}
+  }
+  function stopCapture(message){
+    captureReady=false;abortRecognition();
+    captureStream?.getTracks().forEach(t=>t.stop());
+    try{captureSource?.disconnect();captureNode?.disconnect();}catch{}
+    captureStream=captureSource=captureNode=null;
+    if(audioCtx&&audioCtx.state!=='closed')audioCtx.close().catch(()=>{});
+    $('level').style.width='0';
+    if(message){setStatus('🎤 '+message,true);void voiceStatus(false,message);}
+  }
+  window.addEventListener('pagehide',()=>stopCapture(''));
   async function initVoice() {
     try {
       setStatus('🎤 Загрузка модели распознавания...');
@@ -253,9 +274,12 @@
       parse = createPhraseParser(grammar);
       model = await Vosk.createModel(location.origin + MODEL);
       const { stream, micNote } = await openMic();
+      captureStream=stream;
+      for(const track of stream.getAudioTracks())track.addEventListener('ended',()=>stopCapture('Микрофон отключён. Проверь устройство и перезапусти приложение.'),{once:true});
       audioCtx = new AudioContext();
-      const src = audioCtx.createMediaStreamSource(stream);
+      const src = captureSource=audioCtx.createMediaStreamSource(stream);
       const capture = (data) => {
+        if(!captureReady)return;
         const now = performance.now();
         if (now - lastMeterAt >= 60) {
           lastMeterAt = now;
@@ -285,15 +309,16 @@
         proc = audioCtx.createScriptProcessor(2048, 1, 1);
         proc.onaudioprocess = (e) => capture(new Float32Array(e.inputBuffer.getChannelData(0)));
       }
-      src.connect(proc);
+      if(!captureStream||!stream.getAudioTracks().some(t=>t.readyState==='live'))throw Error('Микрофон недоступен');
+      captureNode=proc;src.connect(proc);
       proc.connect(audioCtx.destination);
+      captureReady=true;
       setStatus('🎤 Голосовой каст готов');
       setTimeout(() => setStatus(''), 3000);
       voiceStatus(true, 'модель и микрофон готовы. ' + micNote + '; ' + captureMode + '; ' + audioCtx.sampleRate + ' Hz');
       if (wantListening) startListening();
     } catch (e) {
-      setStatus('🎤 Голос не работает: ' + (e.message || e), true);
-      voiceStatus(false, 'ошибка: ' + (e.message || e));
+      stopCapture('Голос не работает: '+(e.message||e));
     }
   }
 
@@ -308,6 +333,7 @@
   // по месту в списке: модель по ходу речи пересматривает текст, и фразы могут сдвигаться.
   // Новые уходят одним запросом, чтобы сервер получил их строго по порядку.
   function submit(list) {
+    if(!captureReady)return;
     const batch = [], seen = {};
     for (const p of list) {
       seen[p] = (seen[p] || 0) + 1;
@@ -317,7 +343,7 @@
       sentAt[p] = Date.now();
       batch.push(p);
     }
-    if (batch.length) fetch('/voice', { method: 'POST', body: JSON.stringify({ texts: batch }) }).catch(() => {});
+    if (batch.length) fetch('/voice', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ texts: batch }) }).catch(() => {});
   }
 
   function resetUtterance() {
@@ -372,6 +398,7 @@
       if (rec !== r && !flushing.includes(r)) return;
       const text = m.result.text || '';
       done = (done + ' ' + text).trim();
+      if(testMode&&text)fetch('/voice-test-result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript:text})}).catch(()=>{});
       part = '';
       onRecognition(!!text, true);
       // Итог после отпускания клавиши пришёл — не ждём таймер
@@ -380,7 +407,7 @@
   }
 
   function startListening() {
-    if (!model || !audioCtx || listening) return;
+    if (!model || !audioCtx || !captureReady || listening) return;
     // Быстрое повторное нажатие: предыдущее высказывание закрываем сразу
     if (flushTimer) endUtterance();
     resetUtterance();
@@ -407,11 +434,14 @@
 
 
   // ---------- Отрисовка состояния ----------
-  let wantListening = false;
+  let wantListening = false, testMode = false;
   function render({ state: s, event, spell, reason, aim }) {
-    wantListening = s.enabled && s.listening;
+    testMode = !!s.testOnly;
+    wantListening = s.enabled && s.voiceReady && (s.listening || s.testOnly);
     if (VOICE) {
-      if (wantListening) startListening();
+      if(event==='bindings-reset'||event==='bindings')abortRecognition();
+      if (!s.enabled||!s.voiceReady)abortRecognition();
+      else if (wantListening) startListening();
       else stopListening();
     }
     // При постоянном прослушивании индикатор не показываем, чтобы не висел весь матч
@@ -423,8 +453,8 @@
       if (micShown) keyClick({ vol: 0.12, tone: 1.2 }); // тихий высокий щелчок — микрофон открыт
     }
 
-    if (event === 'cast' && spell) {
-      $('castIcon').src = ICON(spell.base || spell.id);
+    if ((event === 'cast' || event === 'preview') && spell) {
+      /** @type {HTMLImageElement} */ ($('castIcon')).src = ICON(spell.base || spell.id);
       $('castName').textContent = spell.name;
       const el = $('cast');
       // Над прицелом; у краёв экрана плашка не уезжает за него
@@ -436,6 +466,7 @@
       void el.offsetWidth;
       el.classList.add('show');
     }
+    if (event === 'item') toast(spell.name, '#6fbf45', 1800);
     if (event === 'prepared') toast('Подготовлено: ' + spell.name, '#6fbf45', 1800);
     if (event === 'prepare-unconfirmed') toast('Invoke отправлен: ' + spell.name + ' (нет GSI)', '#ff9a2e', 1800);
     if (event === 'refuse') {

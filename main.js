@@ -1,17 +1,18 @@
 // Голосовой каст Инвокера: говоришь название способности — она собирается и применяется.
 // Хук клавиатуры и нажатия — в отдельном потоке (hook-worker.js), распознавание речи —
 // офлайн через Vosk в окне оверлея, состояние способностей — из Dota GSI.
-const { app, BrowserWindow, screen, session, Tray, Menu, dialog, shell } = require('electron');
+const { app, BrowserWindow, screen, session, Tray, Menu, dialog, shell, clipboard, nativeImage } = require('electron');
 const { Worker } = require('worker_threads');
 // Acquire before touching logs, model or native hooks. Same app name across releases.
 if (!app.requestSingleInstanceLock()) {
   console.log('Voice Invoker уже запущен. Открываю настройки существующего экземпляра.');
   app.exit(0);
-  return;
-}
+} else {
 let settingsRequested = process.env.VI_REOPEN_SETTINGS === '1' || process.argv.includes('--vi-reopen-settings');
 let serverReady = false;
 let tray = null;
+let trayStateKey='', diagnosticsAutoOpened=false, voiceEverReady=false, fatalShown=false;
+let setupFailedAtStartup=process.env.VI_SETUP_FAILED==='1', startupDiagnosticTimer=null;
 app.on('second-instance', () => {
   if (serverReady && !shutdown) openSettings();
   else settingsRequested = true;
@@ -19,14 +20,24 @@ app.on('second-instance', () => {
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
+const { ITEM_KEYS, ITEM_SLOTS, readInventory, planItem, validateItemCastModes } = require('./items');
+const { readModelWords } = require('./model-words');
+const { resolveCommands } = require('./custom-commands');
+const { importBindings } = require('./dota-bindings');
+const { processStatus, supportReport, bindingSignature } = require('./diagnostics');
+const {bindingUpdate,watchBindingFile,BUFFER_SIZE,writeBindingUpdate}=require('./binding-sync');
+const { allowedHost, allowedOrigin, jsonContentType, readJson } = require('./local-http');
+const { validateKeys } = require('./key-validation');
+const { saveJsonAtomic } = require('./config-storage');
 const { ACTION, vkOf } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
-const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT } = require('./messages');
+const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT, WM_APP_TOGGLE, WM_APP_BINDINGS } = require('./messages');
 
+/** @type {{port:number,authToken:string,keys:Record<string,string>,voiceChatKey:string,blockKeys:string[],listen:string,castMode:string,timingProfile:string,keyDelayMs:number,castDelayMs:number,slotWaitMs:number,clickDelayMs:number,altDelayMs:number,chainGapMs:number,microphone:string,windowTitle:string,phrases:Record<string,string[]>,acceptInjected:boolean,debugSteps:boolean,experimentalFrames?:boolean,testOnly?:boolean,disabledPhrases?:Record<string,string[]>,customSpellPhrases?:Record<string,string[]>,itemPhrases?:Record<string,string[]>,expandedVocabulary?:boolean,slotCastModes?:Record<string,string>,itemCastModes?:Record<string,string>}} */
 const config = {
   port: 3055,
   // Должен совпадать с "token" в gamestate_integration_voice_invoke.cfg
@@ -94,16 +105,33 @@ const config = {
   debugSteps: false,
 };
 const EXTRA_PHRASES = require('./extra-phrases.json');
-const CONFIG_FILE = path.join(__dirname, 'config.json');
+const { catalog, exclusions, mergeCatalog } = require('./phrase-preferences');
+const { experimentalModel } = require('./experimental-model');
+const {initializeUserData}=require('./user-data');
+let DATA_DIR;
+try {DATA_DIR=initializeUserData(__dirname);}
+catch(e){
+ dialog.showErrorBox('Voice Invoker — ошибка данных','Не удалось открыть папку пользовательских данных: '+e.message+'\nСтарые настройки не удалены.');
+ process.exit(1);
+}
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+/** User configuration is extensible JSON; accepted settings are validated before saving. @type {Record<string, any>} */
 let userConfig = {};
+let configInvalid=false, configBackup=false;
 try {
-  userConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  const loaded=JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8').replace(/^\uFEFF/,''));
+  if(!loaded||typeof loaded!=='object'||Array.isArray(loaded))throw Error('Invalid settings object');
+  userConfig=loaded;
   Object.assign(config, userConfig, {
     keys: { ...config.keys, ...(userConfig.keys || {}) },
-    phrases: { ...config.phrases, ...(userConfig.phrases || {}) },
+    phrases: mergeCatalog(config.phrases,userConfig.phrases),
   });
 } catch (e) {
-  if (e.code !== 'ENOENT') console.error('config.json не прочитан:', e.message);
+  if (e.code !== 'ENOENT') {
+    configInvalid=true;userConfig={};
+    try {fs.copyFileSync(CONFIG_FILE,CONFIG_FILE+'.broken',fs.constants.COPYFILE_EXCL);configBackup=true;}catch {configBackup=fs.existsSync(CONFIG_FILE+'.broken');}
+    console.error('config.json не прочитан:', e.message);
+  }
 }
 // Клавиши ещё ни разу не настраивались — при запуске откроем окно настроек
 const firstRun = !userConfig.keys;
@@ -113,31 +141,32 @@ const MODEL_DIR = path.join(__dirname, 'model');
 const RU_NAME = 'vosk-model-small-ru-0.22';
 const RU_URL = `https://alphacephei.com/vosk/models/${RU_NAME}.zip`;
 let RU_PATH = path.join(MODEL_DIR, RU_NAME + '.tar.gz');
-const phraseToSpell = {};
+const phraseToSpell = Object.create(null);
 const skipped = [];
+const allPhrases = catalog(Object.fromEntries(Object.entries(config.phrases).filter(([id])=>SPELLS.some(s=>s.id===id))), EXTRA_PHRASES);
+let modelWords=null;
+let modelInfo = { active: false, reason: 'initializing' }, experimental = null;
+let voiceInfo = {ready:false, message:''}, lastTest = null;
+const testOnly = config.testOnly === true;
 
 // Build the command set only after the local/downloaded model has been selected.
 function configurePhrases(useExpanded) {
-  for (const [suffix, extra] of Object.entries(EXTRA_PHRASES)) {
-    const id = 'invoker_' + suffix;
-    config.phrases[id] = [...new Set([...(config.phrases[id] || []), ...extra.ready, ...(useExpanded ? extra.pending : [])])];
-    // These short aliases were retired; also remove them from older saved configurations.
-    const retired = suffix === 'sun_strike' ? ['сан'] : suffix === 'cataclysm' ? ['ката', 'катак'] : [];
-    config.phrases[id] = config.phrases[id].filter((phrase) => !retired.includes(phrase.trim().toLowerCase()) && (useExpanded || !extra.pending.includes(phrase.trim().toLowerCase())));
-  }
+  const commands=resolveCommands(allPhrases,EXTRA_PHRASES,config,modelWords,useExpanded,{strict:false});
+  config.phrases=commands.active;
   const isRussian = (phrase) => /[а-яё]/i.test(phrase);
-  // Фраза -> способность. Английские фразы русская модель не распознаёт — их пропускаем.
-  for (const s of SPELLS) {
+  if(commands.errors.length)log('Пропущенные пользовательские фразы:',commands.errors.join('; '));
+  for (const s of [...SPELLS, ...ITEM_SLOTS]) {
     for (const p of config.phrases[s.id] || []) {
-      if (isRussian(p)) phraseToSpell[p.toLowerCase()] = s.id;
+      if (isRussian(p) || 'itemSlot' in s || commands.customSpellPhrases[s.id]?.includes(p)) phraseToSpell[p.toLowerCase()] = s.id;
       else skipped.push(p);
     }
   }
 }
 
 // Лог идёт в консоль и в файл log.txt (перезаписывается при каждом запуске)
-const LOG_FILE = path.join(__dirname, 'log.txt');
+const LOG_FILE = path.join(DATA_DIR, 'log.txt');
 try {
+  if (fs.existsSync(LOG_FILE)) fs.copyFileSync(LOG_FILE, path.join(DATA_DIR, 'log.previous.txt'));
   fs.writeFileSync(LOG_FILE, '');
 } catch {}
 function log(...a) {
@@ -184,9 +213,15 @@ const toHook = (msg, wParam, lParam = 0) => (!shutdown || msg === WM_APP_QUIT) &
 // ---------- Состояние игры из Dota GSI ----------
 let gsi = null; // { at, hero, abilities: { name: {cooldown, can_cast, level} }, slots: [name, name] }
 let gsiWarned = false;
+let gsiRejectedAt = null;
+
 
 function handleGsi(data) {
-  if (config.authToken && data?.auth?.token !== config.authToken) return;
+  if (config.authToken && data?.auth?.token !== config.authToken) {
+    gsiRejectedAt = Date.now();
+    return;
+  }
+  gsiRejectedAt = null;
   const abilities = {};
   const slots = [];
   // Порядок ability0..N совпадает с порядком на панели: два слота способностей идут
@@ -196,16 +231,17 @@ function handleGsi(data) {
     const a = data.abilities[k];
     if (!a || !a.name) continue;
     abilities[a.name] = a;
-    if (a.name.startsWith('invoker_empty') || SPELLS.some((s) => s.id === a.name)) slots.push(a.name);
+    if ((a.name.startsWith('invoker_empty') || SPELLS.some((s) => s.id === a.name)) && slots.length<2) slots.push(a.name);
   }
-  if (!gsi) log('Данные от Dota получены (GSI работает)');
+  if (!gsi || Date.now()-gsi.at>30000) {log('Данные от Dota получены (GSI работает)');void watchBindings(true);}
   gsi = {
     at: Date.now(),
     hero: data.hero?.name || null,
-    alive: data.hero?.alive !== false,
+    alive: data.hero?.alive === true,
     scepter: data.hero?.aghanims_scepter, // undefined, если игра не сообщает
     abilities,
     slots,
+    items: readInventory(data.items),
   };
   checkSlot();
   // Очередь могла ждать свежих данных об Invoke
@@ -223,6 +259,7 @@ function prediction() {
 
 // Решаем, что нажимать для способности: { action }, { refuse: причина } или { wait: true }
 function plan(spell, prepareOnly = false) {
+  if (spell.itemSlot) return planItem(spell,gsi,config,prepareOnly);
   const fresh = gsi && Date.now() - gsi.at < 5000 && gsi.hero;
   if (!fresh) {
     if (!gsiWarned) log('Нет данных от Dota (GSI) — кастую вслепую: сферы + Invoke + слот 1');
@@ -272,8 +309,8 @@ function dispatchCast(spell, action, profile) {
   if (activeCast) return false;
   castRequestId = castRequestId % MAX_CAST_ID + 1;
   const id = castRequestId;
-  if (!toHook(WM_APP_CAST, SPELLS.indexOf(spell) + 1, encodeCast(action, profile, id))) return false;
-  activeCast = { id, spell, action, profile, timedOut: false };
+  if (!toHook(WM_APP_CAST, (spell.itemSlot ? SPELLS.length + spell.itemSlot : SPELLS.indexOf(spell) + 1), encodeCast(action, profile, id))) return false;
+  activeCast = { id, spell, action, profile, timedOut: false, watchdog: null };
   const timing = getTiming(config, profile);
   // Fail closed if the worker stops responding; do not send another series until it replies.
   const limit = 5000 + 3 * timing.keyDelayMs + timing.castDelayMs + timing.clickDelayMs + 2 * timing.altDelayMs;
@@ -287,6 +324,7 @@ function dispatchCast(spell, action, profile) {
 }
 
 function handleCastComplete(m) {
+  lastCastStatus=m.ok?'sent':'failed';
   if (!activeCast || m.id !== activeCast.id) return;
   const finished = activeCast;
   clearTimeout(finished.watchdog);
@@ -327,9 +365,11 @@ function discardWaiting() {
 
 function castByPhrase(command) {
   const { phrase, prepareOnly } = decodeVoiceCommand(command);
-  const spell = SPELLS.find((s) => s.id === phraseToSpell[phrase]);
+  const id=phraseToSpell[phrase];
+  const spell = SPELLS.find(s=>s.id===id) || (id?.startsWith('item_slot_') ? ITEM_SLOTS.find(s=>s.id===id) : null);
   if (!spell) return;
-  if (!last || !last.state.enabled || activeCast?.timedOut) return;
+  if (!last || !last.state.enabled || !last.state.voiceReady || activeCast?.timedOut) return;
+  if(queue.length>=32)return;
   // Одну и ту же фразу могут услышать обе модели — второй раз не кастуем
   const dedupId = (prepareOnly ? 'prepare:' : 'cast:') + spell.id;
   if (lastQueued.id === dedupId && Date.now() - lastQueued.at < 2500) return;
@@ -342,7 +382,7 @@ function castByPhrase(command) {
 function pump() {
   clearTimeout(pumpTimer);
   pumpTimer = null;
-  if (!last?.state.enabled) { discardWaiting(); return; }
+  if (!last?.state.enabled || !last.state.voiceReady) { discardWaiting(); return; }
   while (queue.length && !awaitingSlot && !activeCast) {
     const now = Date.now();
     if (now < busyUntil) {
@@ -375,6 +415,12 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
     log(`"${phrase}" -> отказ: ${p.refuse}`);
     return broadcast({ ...last, event: 'refuse', spell, reason: p.refuse });
   }
+  if (p.itemSlot) {
+    const item=ITEM_SLOTS[p.itemSlot-1];
+    if(!dispatchCast(item,p.action,profile))return cast(spell,phrase,{refuse:'Поток ввода недоступен'});
+    log('Предмет: '+item.name);
+    return broadcast({...last,event:'item',spell:item});
+  }
   if (prepareOnly) {
     if (p.prepared) return notifyPrepared(spell, true);
     if (p.action !== ACTION.PREPARE) return cast(spell, phrase, { refuse: 'Невозможно подготовить способность' });
@@ -386,7 +432,7 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
   }
   // Есть данные от Dota: собираем и ждём, пока способность появится в слоте (см. checkSlot).
   // Вслепую остаётся только фиксированная пауза castDelayMs.
-  if (p.action === ACTION.INVOKE && gsi && Date.now() - gsi.at < 5000) {
+  if (p.action === ACTION.INVOKE && gsi?.hero && Date.now() - gsi.at < 5000) {
     log(`"${phrase}" -> ${spell.name}: Invoke, жду появления в слоте`);
     const from = Date.now();
     if (!dispatchCast(spell, ACTION.PREPARE, profile)) return cast(spell, phrase, { refuse: 'Поток ввода недоступен' });
@@ -409,9 +455,13 @@ function notifyPrepared(spell, confirmed) {
 }
 
 function checkSlot() {
-  if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled) return;
+  if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled || !last.state.voiceReady) return;
   const { spell, phrase, from, timer, profile, prepareOnly } = awaitingSlot;
   if (gsi.at < from) return;
+  if(gsi.hero!=='npc_dota_hero_invoker'||gsi.alive!==true||(!prepareOnly&&spell.needsScepter&&gsi.scepter===false)){
+    clearTimeout(timer);awaitingSlot=null;
+    cast(spell,phrase,{refuse:'Состояние героя изменилось после Invoke'});return pump();
+  }
   const id = spell.base || spell.id;
   const slot = gsi.slots.indexOf(id);
   if (slot < 0) return;
@@ -428,10 +478,12 @@ function checkSlot() {
     cast(spell, phrase, { refuse: `${spell.name} на перезарядке (${Math.ceil(own.cooldown)} сек)` });
     return pump();
   }
+  if(own?.can_cast===false){cast(spell,phrase,{refuse:spell.name+': нельзя применить'});return pump();}
   press(spell, phrase, slot === 1 ? ACTION.SLOT2 : ACTION.SLOT1, `в слоте ${slot + 1} через ${Date.now() - from} мс`, profile);
 }
 
 function slotTimeout() {
+  if(!awaitingSlot)return;
   const { spell, phrase } = awaitingSlot;
   awaitingSlot = null;
   cast(spell, phrase, { refuse: `${spell.name} не появилась в слоте` });
@@ -467,20 +519,6 @@ function broadcast(msg) {
   for (const res of clients) res.write(data);
 }
 
-function readJson(req) {
-  return new Promise((resolve) => {
-    let body = '';
-    req.on('data', (c) => (body += c));
-    req.on('end', () => {
-      try {
-        resolve(JSON.parse(body));
-      } catch {
-        resolve({});
-      }
-    });
-  });
-}
-
 function sendFile(res, file, type) {
   fs.stat(file, (err, st) => {
     if (err) {
@@ -498,55 +536,232 @@ const okKey = (k) => typeof k === 'string' && vkOf(k) > 0;
 
 function settingsData() {
   return {
-    keys: config.keys,
-    voiceChatKey: config.voiceChatKey,
-    castMode: config.castMode,
-    listen: config.listen,
-    blockKeys: config.blockKeys || [],
-    microphone: config.microphone || '',
+    keys: {...config.keys,...userConfig.keys},
+    voiceChatKey: userConfig.voiceChatKey??config.voiceChatKey,
+    castMode: userConfig.castMode??config.castMode,
+    listen: userConfig.listen??config.listen,
+    blockKeys: userConfig.blockKeys??config.blockKeys??[],
+    microphone: userConfig.microphone??config.microphone??'',
+    phraseCatalog: allPhrases,
+    customSpellPhrases: userConfig.customSpellPhrases||{},
+    disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, mergeCatalog(allPhrases,userConfig.customSpellPhrases)),
+    itemPhrases: userConfig.itemPhrases||{},
+    dictionaryReady: !!modelWords,
+    itemSlots: ITEM_SLOTS.map(({id,name,key})=>({id,name,key})),
+    firstRun: !userConfig.keys,
+    experimentalFrames: userConfig.experimentalFrames === true,
+    testOnly: userConfig.testOnly === true,
+    slotCastModes: userConfig.slotCastModes || {},
+    autoSyncBindings:userConfig.autoSyncBindings!==false,syncQuickcast:userConfig.syncQuickcast!==false,bindingNotifications:userConfig.bindingNotifications!==false,bindingGeneration,
+    itemCastModes: userConfig.itemCastModes || {},
   };
 }
 
 // Берём из присланного только известные поля с допустимыми значениями и дописываем их
 // в config.json, не трогая остальное (свои фразы, паузы и т.д.)
 function saveSettings(body) {
+  if(bindingInFlight||bindingPending)throw Error('Подожди завершения синхронизации клавиш.');
+  if(body.bindingGeneration!==undefined&&body.bindingGeneration!==bindingGeneration)throw Error('Клавиши изменились. Считай их заново перед сохранением.');
   const out = { ...userConfig };
+  for(const k of ['autoSyncBindings','syncQuickcast','bindingNotifications'])if(typeof body[k]==='boolean')out[k]=body[k];
   const keys = {};
   for (const n of KEY_NAMES) if (okKey(body.keys?.[n])) keys[n] = body.keys[n].toUpperCase();
-  out.keys = { ...config.keys, ...keys };
+  for (const n of ITEM_KEYS) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
+  out.keys = { ...config.keys, ...userConfig.keys, ...keys };
   if (okKey(body.voiceChatKey)) out.voiceChatKey = body.voiceChatKey.toUpperCase();
+  validateKeys(out.keys,out.voiceChatKey||config.voiceChatKey);
   if (['click', 'quickcast'].includes(body.castMode)) out.castMode = body.castMode;
   if (['hold', 'always'].includes(body.listen)) out.listen = body.listen;
   if (typeof body.microphone === 'string') out.microphone = body.microphone.slice(0, 200);
   if (Array.isArray(body.blockKeys)) out.blockKeys = body.blockKeys.filter((n) => KEY_NAMES.includes(n));
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n');
+  if (body.disabledPhrases !== undefined) out.disabledPhrases = body.disabledPhrases;
+  if (body.customSpellPhrases !== undefined) out.customSpellPhrases = body.customSpellPhrases;
+  if (typeof body.experimentalFrames === 'boolean') out.experimentalFrames = body.experimentalFrames;
+  if (typeof body.testOnly === 'boolean') out.testOnly = body.testOnly;
+  if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v)));
+  // Validate spell and item preferences together before writing anything.
+  if(body.itemPhrases!==undefined)out.itemPhrases=body.itemPhrases;
+  const commands=resolveCommands(allPhrases,EXTRA_PHRASES,out,modelWords,modelInfo.active);
+  out.customSpellPhrases=commands.customSpellPhrases;
+  out.itemPhrases=commands.itemPhrases;
+  out.disabledPhrases=commands.disabledPhrases;
+  if(body.itemCastModes!==undefined)out.itemCastModes=validateItemCastModes(body.itemCastModes);
+  saveJsonAtomic(CONFIG_FILE, out);
+  const syncOptionsChanged=out.autoSyncBindings!==userConfig.autoSyncBindings||out.syncQuickcast!==userConfig.syncQuickcast;
   userConfig = out;
+  configInvalid=false;
+  if(out.autoSyncBindings===false){bindingPending=null;clearTimeout(bindingRetry);}
+  else if(syncOptionsChanged){lastBindingSignature=null;bindingWatcher?.refresh();}
   log('Настройки сохранены в config.json');
 }
 
+let repairingGsi=false, repairFailed=false, hookFailed=false, hookError='', lastCastStatus=null;
+let bindingWatcher=null, watchedBindingFile=null, lastBindingSignature=null, bindingsChanged=false, checkingBindings=false;
+let bindingPending=null,bindingInFlight=null,bindingRetry=null,bindingAckTimer=null,bindingGeneration=0,bindingNotice='',latestBindings=null;
+const bindingBuffer=new SharedArrayBuffer(BUFFER_SIZE);
+async function repairGsi(pick=false){
+  if(repairingGsi)return {ok:false,error:'Восстановление уже выполняется'};
+  repairingGsi=true;
+  const run=folder=>new Promise((resolve,reject)=>{
+    const args=['-NoProfile','-NonInteractive','-File',path.join(__dirname,'setup-dota.ps1'),'-NoPrompt'];
+    if(folder)args.push('-DotaPath',folder);
+    execFile('powershell.exe',args,{cwd:__dirname,windowsHide:true,timeout:30000},(error,stdout,stderr)=>{
+      if(error)reject(new Error(String(stderr||stdout||error.message)));else resolve();
+    });
+  });
+  try {
+    const confirm=await dialog.showMessageBox({type:'question',buttons:['Восстановить','Отмена'],defaultId:1,cancelId:1,title:'Voice Invoker',message:'Проверить и восстановить только файл GSI Voice Invoker?',detail:'Steam и Dota не будут закрыты, личные бинды и параметры Steam не изменяются.'});
+    if(confirm.response!==0)return {ok:false,error:'Отменено'};
+    const choose=async()=>{
+      const choice=await dialog.showOpenDialog({title:'Выбери папку установки Dota 2 (с папкой game)',properties:['openDirectory']});
+      if(choice.canceled||!choice.filePaths[0])return null;
+      let folder=choice.filePaths[0];
+      for(let i=0;i<5;i++){
+        if(fs.existsSync(path.join(folder,'game','bin','win64','dota2.exe')))return folder;
+        const parent=path.dirname(folder);if(parent===folder)break;folder=parent;
+      }
+      throw Error('INVALID_DOTA_FOLDER');
+    };
+    if(pick){const folder=await choose();if(!folder)return {ok:false,error:'Папка не выбрана'};await run(folder);}
+    else try{await run();}catch(e){
+      if(!e.message.includes('DOTA_NOT_FOUND'))throw e;
+      const folder=await choose();if(!folder)return {ok:false,error:'Папка не выбрана'};await run(folder);
+    }
+    repairFailed=false;setupFailedAtStartup=false;
+    return {ok:true,message:'GSI проверен. Если игра была открыта, перезапусти Dota для загрузки файла.'};
+  }catch(e){repairFailed=true;log('Ошибка восстановления GSI:',e.message);return {ok:false,error:e.message.includes('INVALID_DOTA_FOLDER')?'В выбранной папке не найдена Dota 2.':e.message.includes('Dota moved')?'Привязка GSI осталась к другой папке. Сначала восстанови предыдущую интеграцию через setup-dota.ps1 -Uninstall.':e.message.includes('changed externally')?'GSI изменён вне приложения. Исходный файл сохранён; проверь журнал.':'Не удалось восстановить GSI. Проверь журнал и разрешения Windows; при блокировке скрипта используй start.bat.'};}
+  finally{repairingGsi=false;}
+}
+function bindingAlert(message){
+  bindingNotice=message;bindingsChanged=true;updateTray();log(message);
+  if(userConfig.bindingNotifications!==false&&tray&&!tray.isDestroyed())try{tray.displayBalloon({title:'Voice Invoker — клавиши Dota',content:message});}catch{}
+}
+function maybeApplyBindings(){
+  clearTimeout(bindingRetry);bindingRetry=null;
+  if(shutdown||!bindingPending||bindingInFlight)return;
+  if(userConfig.autoSyncBindings===false){bindingPending=null;return;}
+  if(activeCast||awaitingSlot||queue.length||!hookThreadId){bindingRetry=setTimeout(maybeApplyBindings,100);return;}
+  const patch=bindingPending;bindingPending=null;
+  const id=bindingGeneration+1;
+  try{
+    writeBindingUpdate(bindingBuffer,patch);
+    bindingInFlight={id,patch};
+    if(last)broadcast({...last,event:'bindings-reset'});
+    if(!toHook(WM_APP_BINDINGS,id))throw Error('Поток ввода недоступен');
+    bindingAckTimer=setTimeout(()=>fatalError('Синхронизация клавиш',Error('Хук не подтвердил новые клавиши')),4000);
+  }catch(e){bindingInFlight=null;bindingAlert('Синхронизация не выполнена: '+e.message);}
+}
+function applyBindingResult(m){
+  if(!bindingInFlight||m.id!==bindingInFlight.id)return;
+  clearTimeout(bindingAckTimer);
+  const {patch}=bindingInFlight;bindingInFlight=null;
+  if(!m.ok){bindingAlert('Синхронизация не выполнена: '+m.reason);maybeApplyBindings();return;}
+  Object.assign(config,patch);bindingGeneration=m.id;
+  try{
+    const out={...userConfig,...patch};saveJsonAtomic(CONFIG_FILE,out);userConfig=out;
+    bindingsChanged=false;bindingNotice='Клавиши Dota синхронизированы без перезапуска.';log(bindingNotice);
+    if(userConfig.bindingNotifications!==false&&tray&&!tray.isDestroyed())try{tray.displayBalloon({title:'Voice Invoker — клавиши Dota',content:bindingNotice});}catch{}
+  }catch(e){bindingAlert('Клавиши применены, но не сохранены: '+e.message);}
+  updateTray();maybeApplyBindings();
+}
+function onBindingRead(bindings){
+  if(shutdown)return;
+  latestBindings=bindings;
+  const signature=bindingSignature(bindings);
+  if(!signature||signature===lastBindingSignature)return;
+  const first=lastBindingSignature===null;lastBindingSignature=signature;
+  if(userConfig.autoSyncBindings===false){if(!first)bindingAlert('Бинды изменились. Автосинхронизация выключена.');return;}
+  try{
+    if(configInvalid)throw Error('Сначала восстанови повреждённые настройки.');
+    const differs=(a,b)=>Object.keys({...a,...b}).some(k=>a?.[k]!==b?.[k]);
+    if((userConfig.keys&&differs({...config.keys,...userConfig.keys},config.keys))||(userConfig.voiceChatKey&&userConfig.voiceChatKey!==config.voiceChatKey)||(userConfig.slotCastModes&&differs(userConfig.slotCastModes,config.slotCastModes||{})))throw Error('Есть сохранённые настройки, ожидающие перезапуска.');
+    const patch=bindingUpdate(bindings,config,userConfig.syncQuickcast!==false);
+    if(!bindingInFlight&&!differs(patch.keys,config.keys)&&patch.voiceChatKey===config.voiceChatKey&&!differs(patch.slotCastModes,config.slotCastModes||{})){bindingPending=null;bindingsChanged=false;return;}
+    bindingPending=patch;queue.length=0;bindingsChanged=true;bindingNotice='Ожидается завершение текущего каста.';maybeApplyBindings();
+  }catch(e){bindingPending=null;bindingAlert('Бинды не изменены: '+e.message);}
+}
+async function watchBindings(force=false){
+  if(shutdown||checkingBindings)return;
+  checkingBindings=true;
+  try{
+    const proc=await processStatus(force);
+    if(shutdown)return;
+    // Lifecycle CI uses a private fixture, never a Steam account.
+    const file=(process.env.VI_LIFECYCLE_DIR&&process.env.VI_BINDINGS_FILE)||proc.bindingFile||null;
+    if(file===watchedBindingFile&&bindingWatcher&&!bindingWatcher.closed){if(force)bindingWatcher.refresh();return;}
+    bindingWatcher?.close();bindingWatcher=null;watchedBindingFile=file;lastBindingSignature=null;latestBindings=null;bindingPending=null;
+    if(!file)return;
+    bindingWatcher=watchBindingFile(file,onBindingRead,e=>{latestBindings=null;lastBindingSignature=null;bindingPending=null;bindingAlert('Не удалось прочитать бинды Dota: '+e.message);});
+  }catch(e){bindingAlert('Наблюдение за биндами недоступно: '+e.message);}
+  finally{checkingBindings=false;}
+}
+async function diagnostics(force=false) {
+  let installed = false, cfgMatches = false, itemsConfigured = false, dotaFound = false, gsiPath = '', tracked=false;
+  const proc = await processStatus(force);
+  try {
+    const record = JSON.parse(fs.readFileSync(path.join(__dirname,'.dota-install.json'),'utf8').replace(/^\uFEFF/,''));
+    if(typeof record.target==='string'&&path.basename(record.target)==='gamestate_integration_voice_invoke.cfg'){
+      const game=path.resolve(path.dirname(record.target),'..','..','..');
+      if(fs.existsSync(path.join(game,'bin','win64','dota2.exe'))){gsiPath=record.target;dotaFound=true;tracked=true;}
+    }
+  } catch {}
+  if(!dotaFound&&proc.dotaPath){dotaFound=true;gsiPath=path.join(proc.dotaPath,'game','dota','cfg','gamestate_integration','gamestate_integration_voice_invoke.cfg');}
+  try {
+    installed=!!gsiPath&&fs.existsSync(gsiPath);
+    if(installed){const raw=fs.readFileSync(gsiPath,'utf8');cfgMatches=raw.includes('http://127.0.0.1:'+config.port+'/gsi')&&raw.includes('"'+config.authToken+'"');itemsConfigured=/"items"\s*"1"/.test(raw);}
+  }catch{}
+  const binds=watchedBindingFile?latestBindings:proc.bindings;
+  const required=['quas','wex','exort','invoke','slot1','slot2','voice'];
+  const bindingMatches=binds ? required.every(k=>!!binds.keys[k]) && Object.entries(binds.keys).every(([key,value])=>(key==='voice'?config.voiceChatKey:config.keys[key])===value) && Object.entries(binds.slotCastModes).every(([key,value])=>(config.slotCastModes?.[key]||(ITEM_KEYS.includes(key)?'quickcast':config.castMode))===value) : null;
+  const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
+  const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
+  const abilities=gsi?Object.fromEntries(Object.values(gsi.abilities).filter(a=>gameName(a.name)).map(a=>[a.name,{level:Number.isFinite(a.level)?a.level:null,cooldown:Number.isFinite(a.cooldown)?a.cooldown:null,canCast:a.can_cast===true}])):null;
+  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingGeneration,bindingNotice,bindingsChanged,bindingWatching:!!bindingWatcher&&!bindingWatcher.closed,bindingsIssue:binds?null:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,slotCastModes:config.slotCastModes||{},bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
+}
 let settingsWin = null;
-function openSettings() {
+function openStartupDiagnostics(){
+  if(diagnosticsAutoOpened||shutdown||!serverReady)return;
+  diagnosticsAutoOpened=true;
+  if(!settingsWin||settingsWin.isDestroyed()||!settingsWin.isVisible())openSettings(false);
+}
+function openSettings(focus=true) {
+  void watchBindings(true);
   if (shutdown || !serverReady) return;
   if (settingsWin && !settingsWin.isDestroyed()) {
     if (settingsWin.isMinimized()) settingsWin.restore();
-    settingsWin.show();
-    return settingsWin.focus();
+    if(focus){settingsWin.show();return settingsWin.focus();}
+    settingsWin.showInactive();return;
   }
   settingsWin = new BrowserWindow({
-    width: 640, height: 760, minWidth: 480, title: 'Voice Invoke — настройки',
-    backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true,
+    width: Math.min(680,screen.getPrimaryDisplay().workAreaSize.width), height: Math.min(880,screen.getPrimaryDisplay().workAreaSize.height), minWidth: 480, title: 'Voice Invoke — настройки',
+    backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true, show:focus, icon: path.join(__dirname,'icon.png'),
   });
+  if(!focus)settingsWin.once('ready-to-show',()=>settingsWin?.showInactive());
   settingsWin.setMenu(null);
+  settingsWin.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  settingsWin.webContents.on('will-navigate',e=>e.preventDefault());
   settingsWin.loadURL(`http://localhost:${config.port}/settings`).catch(e => log('Не удалось открыть настройки:', e.message));
   settingsWin.on('closed', () => (settingsWin = null));
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req,res)=>{
+  handleRequest(req,res).catch(e=>{
+    if(res.headersSent){res.end();return;}
+    res.writeHead(e.statusCode||500,{'Content-Type':'application/json'});
+    res.end(JSON.stringify({ok:false,error:e.statusCode?e.message:'Local request failed'}));
+    if(!e.statusCode)log('Ошибка HTTP:',e.message);
+  });
+});
+async function handleRequest(req,res){
+  if(!allowedHost(req.headers.host,config.port)||!allowedOrigin(req.headers.origin,config.port)){
+    res.writeHead(403);return res.end();
+  }
   const p = new URL(req.url, 'http://localhost').pathname;
   const done = () => {
     res.writeHead(204);
     res.end();
   };
+  if(req.method==='POST'&&p!=='/gsi'&&!jsonContentType(req.headers['content-type'])){res.writeHead(415);return res.end();}
   if (req.method === 'POST' && p === '/gsi') {
     handleGsi(await readJson(req));
     return done();
@@ -559,28 +774,55 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (p === '/' || p === '/overlay.html') return sendFile(res, path.join(__dirname, 'overlay.html'), 'text/html; charset=utf-8');
+  if (p === '/icon.png') return sendFile(res,path.join(__dirname,'icon.png'),'image/png');
   if (p === '/sounds/keys.wav') return sendFile(res, path.join(__dirname, 'keys.wav'), 'audio/wav');
   if (p === '/vosk.js') return sendFile(res, require.resolve('vosk-browser/dist/vosk.js'), 'text/javascript');
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
   if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
   if (p === '/settings') return sendFile(res, path.join(__dirname, 'settings.html'), 'text/html; charset=utf-8');
+  if ((p === '/repair-gsi'||p === '/pick-dota') && req.method === 'POST') {
+    res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify(await repairGsi(p==='/pick-dota')));
+  }
+  if (p === '/open-logs' && req.method === 'POST') {
+    const error=await shell.openPath(DATA_DIR);if(error){res.writeHead(500);return res.end();}return done();
+  }
+  if (p === '/import-bindings' && req.method === 'POST') {
+    res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
+    try {return res.end(JSON.stringify({ok:true,...importBindings(),bindingGeneration}));} catch(e){return res.end(JSON.stringify({ok:false,error:String(e.message).slice(0,180)}));}
+  }
+  // Visual-only overlay preview: never enters the voice parser, queue or native hook.
+  if (p === '/preview-sun-strike' && req.method === 'POST') {
+    if (!last || !hookThreadId || shutdown) {res.writeHead(409);return res.end();}
+    broadcast({...last,event:'preview',spell:SPELLS.find(s=>s.id==='invoker_sun_strike'),aim:{x:0.5,y:0.5}});
+    return done();
+  }
+  if(p==='/copy-launch-flag'&&req.method==='POST'){clipboard.writeText('-gamestateintegration');return done();}
+  if (p === '/copy-report' && req.method === 'POST') {
+    clipboard.writeText(supportReport(await diagnostics()));return done();
+  }
+  if (p === '/diagnostics' && req.method === 'GET') {
+    res.writeHead(200, {'Content-Type':'application/json','Cache-Control':'no-store'});
+    return res.end(JSON.stringify(await diagnostics(new URL(req.url,'http://localhost').searchParams.get('refresh')==='1')));
+  }
+  if (p === '/dictionary' && req.method === 'GET') {
+    const q=(new URL(req.url,'http://localhost').searchParams.get('q')||'').trim().toLowerCase().slice(0,100);
+    const matches=[];if(modelWords&&q.length>=2)for(const word of modelWords){if(word.startsWith(q))matches.push(word);if(matches.length>=30)break;}
+    res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify({ready:!!modelWords,exact:!!modelWords?.has(q),matches}));
+  }
   if (p === '/config' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(settingsData()));
   }
   // Только application/json: чужая страница в браузере не сможет отправить такой запрос без CORS
   if (req.method === 'POST' && (p === '/config' || p === '/restart')) {
-    if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
-      res.writeHead(415);
-      return res.end();
-    }
     if (p === '/restart') {
       done();
       log('Перезапуск с новыми настройками...');
       return requestShutdown(true);
     }
+    const body = await readJson(req);
     try {
-      saveSettings(await readJson(req));
+      saveSettings(body);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end('{"ok":true}');
     } catch (e) {
@@ -601,25 +843,41 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/voice') {
     if (shutdown) return done();
     const { text, texts } = await readJson(req);
-    for (const t of Array.isArray(texts) ? texts : [text]) castByPhrase(String(t || '').trim().toLowerCase());
+    if (testOnly) {
+      lastTest = {...lastTest,matched:(Array.isArray(texts)?texts:[text]).map(t=>String(t||'').slice(0,200)).slice(0,20), at:Date.now()};
+      return done();
+    }
+    if(!voiceReady||bindingPending||bindingInFlight)return done();
+    for (const t of (Array.isArray(texts) ? texts : [text]).slice(0,32)) if(typeof t==='string'&&t.length<=200)castByPhrase(t.trim().toLowerCase());
+    return done();
+  }
+  if (req.method === 'POST' && p === '/voice-test-result') {
+    if(testOnly){const {transcript}=await readJson(req);lastTest={...lastTest,transcript:String(transcript||'').slice(0,400),at:Date.now()};}
     return done();
   }
   if (req.method === 'POST' && p === '/voice-status') {
     const { ready, message } = await readJson(req);
     if (message) log('Голос:', message);
-    voiceReady = !!ready;
+    voiceReady = ready === true;
+    if(!voiceReady){
+      discardWaiting();
+      if(last){last={state:{...last.state,voiceReady:false}};broadcast({...last,event:'voice'});}
+    }
+    voiceInfo = {ready:voiceReady,message:String(message||'')};
+    if(voiceReady)voiceEverReady=true;
+    else if(!voiceEverReady&&message)openStartupDiagnostics();
     toHook(WM_APP_VOICE_READY, voiceReady ? 1 : 0);
     return done();
   }
   res.writeHead(404);
   res.end();
-});
+}
 setInterval(() => clients.forEach((res) => res.write(': ping\n\n')), 15000);
 
 // ---------- Хук клавиатуры ----------
 function startWorker() {
   if (shutdown) return;
-  const worker = hookWorker = new Worker(path.join(__dirname, 'hook-worker.js'), { workerData: { config } });
+  const worker = hookWorker = new Worker(path.join(__dirname, 'hook-worker.js'), { workerData: { config: testOnly ? {...config,blockKeys:[]} : config, bindingBuffer } });
   worker.on('message', (m) => {
     if (m.type === 'quit-request') return requestShutdown(false);
     if (m.type === 'stopped') {
@@ -627,11 +885,12 @@ function startWorker() {
       return;
     }
     if (m.type === 'log') return log(m.text);
+    if (m.type === 'bindings-applied') return applyBindingResult(m);
     if (m.type === 'cast-complete') return handleCastComplete(m);
     if (m.type === 'step' && config.debugSteps) return log('Шаг:', m.edge, m.step, Math.round(m.elapsedMs) + ' мс');
     if (m.type === 'settings') return openSettings();
     if (m.type === 'ready') {
-      hookThreadId = m.threadId;
+      hookThreadId = m.threadId;hookFailed=false;hookError='';
       log('Хук клавиатуры установлен');
       if (shutdown) return toHook(WM_APP_QUIT, 0);
       return toHook(WM_APP_VOICE_READY, voiceReady ? 1 : 0);
@@ -639,20 +898,25 @@ function startWorker() {
     if (m.type === 'state') {
       if (shutdown) return;
       last = { state: m.state };
-      if (!m.state.enabled) discardWaiting();
+      updateTray();
+      if (!m.state.enabled || !m.state.voiceReady) discardWaiting();
       broadcast({ ...last, event: m.event });
       if (m.event === 'profile') log('Режим задержек:', profileLabel(m.state.timingProfile));
       if (m.event === 'blocked') log('Клавиша заблокирована: способности только голосом');
       if (m.event === 'toggle') log(m.state.enabled ? 'Голосовой каст ВКЛЮЧЁН' : 'Голосовой каст ВЫКЛЮЧЕН');
     }
   });
-  worker.on('error', (e) => log('Ошибка потока хука:', e.stack || e));
+  worker.on('error', (e) => {hookFailed=true;hookError=String(e.message||e);log('Ошибка потока хука:', e.stack || e);fatalError('Нативный хук завершился с ошибкой',e);});
   worker.on('exit', (code) => {
     hookWorker = null;
     hookThreadId = 0;
     if (shutdown) return finishShutdown();
+    hookFailed=true;hookError='Код завершения: '+code;
     log('Поток ввода завершён, код:', code);
+    discardWaiting();
+    if(last){last={state:{...last.state,enabled:false,listening:false}};broadcast({...last,event:'toggle'});}
     if (activeCast) handleCastComplete({ id: activeCast.id, ok: false, reason: 'Поток ввода завершён', profile: activeCast.profile, elapsedMs: 0 });
+    fatalError('Поток ввода неожиданно завершился',new Error('Код: '+code));
   });
 }
 
@@ -682,12 +946,15 @@ function finishShutdown() {
   if (!shutdown || hookWorker || exiting) return;
   exiting = true;
   clearInterval(shutdown.retry);
+  bindingWatcher?.close();clearTimeout(bindingRetry);clearTimeout(bindingAckTimer);
+  clearTimeout(startupDiagnosticTimer);
   for (const client of clients) client.end();
   clients.clear();
   serverReady = false;
   if (tray && !tray.isDestroyed()) tray.destroy();
   // Wait for the listening socket to close before allowing another process.
   const exit = () => {
+    try { experimental?.cleanup(); } catch(e) { log('Не удалось удалить временную модель:', e.message); }
     if (shutdown.restart && process.env.VI_SUPERVISED !== '1') {
       app.relaunch({ args: [...process.argv.slice(1).filter(a => a !== '--vi-reopen-settings'), '--vi-reopen-settings'] });
     }
@@ -700,32 +967,53 @@ app.on('before-quit', (event) => {
   if (!exiting) { event.preventDefault(); requestShutdown(false); }
 });
 
+function fatalError(title,error){
+  if(fatalShown||shutdown)return;
+  fatalShown=true;
+  const message=String(error?.message||error||'Неизвестная ошибка');
+  log('Критическая ошибка:',title,error?.stack||message);
+  requestShutdown(false,1);
+  dialog.showErrorBox('Voice Invoker — '+title,message+'\n\nЖурнал: '+LOG_FILE+'\nНастройки сохранены. Приложение завершает работу.');
+}
+function updateTray(){
+  if(!tray||tray.isDestroyed()||shutdown)return;
+  const enabled=!!last?.state.enabled;
+  const key=String(enabled)+':'+bindingsChanged+':'+testOnly;
+  if(trayStateKey===key)return;trayStateKey=key;
+  tray.setToolTip('Voice Invoker — '+(testOnly?'тест без нажатий':enabled?'каст включён':'каст выключен'));
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {label:'Настройки / диагностика',click:()=>openSettings()},
+    {label:testOnly?'Тестовое распознавание':'Голосовой каст',type:'checkbox',checked:enabled,click:()=>toHook(WM_APP_TOGGLE,0)},
+    ...(bindingsChanged?[{label:'Клавиши Dota изменились — проверить',click:()=>openSettings()}]:[]),
+    {label:'Перезапустить',click:()=>requestShutdown(true)},
+    {label:'Скопировать отчёт',click:()=>{diagnostics().then(d=>clipboard.writeText(supportReport(d))).catch(e=>log('Ошибка отчёта:',e.message));}},
+    {label:'Открыть журнал',click:()=>shell.openPath(LOG_FILE).then(error=>{if(error)log(error);})},
+    {label:'Папка журналов',click:()=>shell.openPath(DATA_DIR)},
+    {type:'separator'},
+    {label:'Выйти из Voice Invoker',click:()=>requestShutdown(false)}
+  ]));
+}
 async function createTray() {
   try {
-    const icon = await app.getFileIcon(process.execPath, { size: 'small' });
-    if (shutdown) return;
-    tray = new Tray(icon);
-    tray.setToolTip('Voice Invoker — работает');
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Настройки', click: openSettings },
-      { label: 'Перезапустить', click: () => requestShutdown(true) },
-      { label: 'Открыть журнал', click: () => shell.openPath(LOG_FILE).then(error => { if (error) log(error); }) },
-      { type: 'separator' },
-      { label: 'Выйти из Voice Invoker', click: () => requestShutdown(false) },
-    ]));
-    tray.on('double-click', openSettings);
-  } catch (e) { log('Не удалось создать значок в трее:', e.message); }
+    let icon=nativeImage.createFromPath(path.join(__dirname,'icon.png'));
+    if(icon.isEmpty())icon=await app.getFileIcon(process.execPath,{size:'small'});
+    if(shutdown)return;
+    tray=new Tray(icon);trayStateKey='';updateTray();
+    tray.on('double-click',()=>openSettings());
+  }catch(e){log('Не удалось создать значок в трее:',e.message);openStartupDiagnostics();}
 }
 
 // ---------- Окно поверх игры (в нём же работает распознавание) ----------
 function createWindow() {
   // Разрешаем доступ к микрофону для нашей страницы
-  session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => cb(permission === 'media'));
-  session.defaultSession.setPermissionCheckHandler((wc, permission) => permission === 'media');
+  const ownOrigin=url=>{try{return new URL(url).origin==='http://localhost:'+config.port;}catch{return false;}};
+  session.defaultSession.setPermissionRequestHandler((wc,permission,cb,details)=>cb(permission==='media'&&ownOrigin(wc?.getURL())&&ownOrigin(details.requestingUrl||wc?.getURL())&&(!('mediaTypes' in details)||!details.mediaTypes||details.mediaTypes.every(t=>t==='audio'))));
+  session.defaultSession.setPermissionCheckHandler((wc,permission,origin,details)=>permission==='media'&&ownOrigin(origin)&&(!details.mediaType||details.mediaType==='audio'));
+
 
   const { bounds } = screen.getPrimaryDisplay();
   const win = new BrowserWindow({
-    ...bounds,
+    ...bounds, icon:path.join(__dirname,'icon.png'),
     transparent: true,
     frame: false,
     resizable: false,
@@ -735,6 +1023,15 @@ function createWindow() {
     alwaysOnTop: true,
     title: 'Voice Invoke',
     webPreferences: { backgroundThrottling: false },
+  });
+  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  win.webContents.on('will-navigate',e=>e.preventDefault());
+  let recoveries=0;
+  win.webContents.on('render-process-gone', () => {
+    if(shutdown||win.isDestroyed())return;
+    voiceReady=false; voiceInfo={ready:false,message:'Оверлей завершился'}; toHook(WM_APP_VOICE_READY,0); discardWaiting();
+    if(++recoveries<=3)setTimeout(()=>{if(!shutdown&&!win.isDestroyed())win.reload();},1000);
+    else log('Оверлей неоднократно завершился; требуется перезапуск');
   });
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setIgnoreMouseEvents(true);
@@ -758,23 +1055,28 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   try {
-    const modelSelection = await prepareExpandedModel(MODEL_DIR, userConfig.expandedVocabulary, { log });
+    const modelSelection = modelInfo = await prepareExpandedModel(MODEL_DIR, userConfig.expandedVocabulary, { log });
     if (modelSelection.active) RU_PATH = modelSelection.file;
-    configurePhrases(modelSelection.active);
     log('Vosk:', modelSelection.active ? 'Invoker V2 (SHA-256 OK)' : 'stock ru-0.22; expanded model: ' + modelSelection.reason);
     await ensureModel();
+    try {modelWords=readModelWords(RU_PATH);log('Словарь модели:',modelWords.size,'слов');}catch(e){log('Словарь предметов недоступен:',e.message);}
+    configurePhrases(modelSelection.active);
+    if (config.experimentalFrames === true && modelSelection.active) {
+      try { experimental=experimentalModel(RU_PATH); RU_PATH=experimental.file; log('Экспериментальная модель: frames-per-chunk=3'); }
+      catch(e) { log('Экспериментальная модель недоступна, использую обычную V2:',e.message); }
+    }
   } catch (e) {
     log('Не удалось подготовить модель распознавания, голос работать не будет:', e.message);
+    voiceInfo={ready:false,message:'Не удалось подготовить модель: '+e.message};
   }
   if (shutdown) return;
   if (skipped.length) log(`Фразы не по-русски пропущены (слушает только русская модель): ${skipped.join(', ')}`);
   server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
+    if ('code' in e && e.code === 'EADDRINUSE') {
       log(`Порт ${config.port} уже занят (плагин уже запущен или порт занят другой программой).`);
       log('Проверь владельца порта: Get-NetTCPConnection -LocalPort ' + config.port + ' -State Listen');
-      dialog.showErrorBox('Voice Invoker: порт занят', 'Порт ' + config.port + ' уже используется. Закрой предыдущий Voice Invoker или проверь владельца порта. Порт автоматически не меняется.');
-    } else log('Ошибка сервера:', e.message);
-    requestShutdown(false, 1);
+      fatalError('Порт занят',new Error('Порт '+config.port+' уже используется. Проверь владельца порта. Порт автоматически не меняется.'));
+    } else fatalError('Ошибка локального сервера',e);
   });
   server.listen(config.port, '127.0.0.1', () => {
     if (shutdown) return;
@@ -787,9 +1089,17 @@ app.whenReady().then(async () => {
       : `Слушаю, пока зажата клавиша голосового чата ${String(config.voiceChatKey).toUpperCase()}`);
     log('Ctrl+Shift+F7 — вкл/выкл, Ctrl+Shift+F8 — выход, Ctrl+Shift+F9 — настройки клавиш, Ctrl+Shift+F10 — обычный режим, Ctrl+Shift+F11 — ускоренный, Ctrl+Shift+F12 — турбо');
     startWorker();
+    void watchBindings();
     createWindow();
     createTray();
     if (firstRun || settingsRequested) { settingsRequested = false; openSettings(); }
+    if(configInvalid||!modelWords||!modelInfo.active||voiceInfo.message||setupFailedAtStartup)openStartupDiagnostics();
+    startupDiagnosticTimer=setTimeout(()=>{diagnostics().then(d=>{
+      if(!d.dotaFound||!d.gsiInstalled||!d.gsiConfigMatches||!d.itemsConfigured||(d.running===true&&d.launchFlag===false))openStartupDiagnostics();
+    }).catch(e=>log('Проверка старта:',e.message));},10000);
   });
-});
+}).catch(e=>fatalError('Ошибка запуска',e));
+process.on('uncaughtException',e=>fatalError('Критическая ошибка',e));
+process.on('unhandledRejection',e=>fatalError('Необработанная ошибка',e));
 app.on('window-all-closed', () => requestShutdown(false));
+}

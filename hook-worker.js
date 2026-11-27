@@ -4,12 +4,13 @@
 // поток выполняет их как последовательность нажатий с паузами (таймер WM_TIMER).
 const { parentPort, workerData } = require('worker_threads');
 const koffi = require('koffi');
-const SPELLS = require('./spells');
+const SPELLS = [...require('./spells'), ...require('./items').ITEM_SLOTS];
 const { createVoiceCast } = require('./logic');
 const { decodeCast } = require('./timing-profiles');
-const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST } = require('./messages');
+const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST, WM_APP_TOGGLE, WM_APP_BINDINGS } = require('./messages');
 
 const config = workerData.config;
+const {readBindingUpdate}=require('./binding-sync');
 const user32 = koffi.load('user32.dll');
 const kernel32 = koffi.load('kernel32.dll');
 
@@ -38,7 +39,6 @@ const GetForegroundWindow = user32.func('void * __stdcall GetForegroundWindow()'
 const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(void *hWnd, void *lpString, int nMaxCount)');
 const GetModuleHandleW = kernel32.func('void * __stdcall GetModuleHandleW(void *lpModuleName)');
 const GetCurrentThreadId = kernel32.func('uint32 __stdcall GetCurrentThreadId()');
-const PostThreadMessageW = user32.func('bool __stdcall PostThreadMessageW(uint32 idThread, uint32 Msg, uintptr_t wParam, intptr_t lParam)');
 const MapVirtualKeyW = user32.func('uint32 __stdcall MapVirtualKeyW(uint32 uCode, uint32 uMapType)');
 const SetTimer = user32.func('uintptr_t __stdcall SetTimer(void *hWnd, uintptr_t nIDEvent, uint32 uElapse, void *lpTimerFunc)');
 const KillTimer = user32.func('bool __stdcall KillTimer(void *hWnd, uintptr_t uIDEvent)');
@@ -157,6 +157,7 @@ function finishSequence(ok, reason = '') {
 
 function runSequence() {
   while (seq && seqIdx < seq.length) {
+    if (!voice.state.enabled || !voice.state.voiceReady) return finishSequence(false, 'Voice casting disabled or microphone unavailable');
     if (!isGameActive()) return finishSequence(false, 'Dota lost focus');
     const step = seq[seqIdx];
     if (step.wait > 0 && !step.waited) {
@@ -185,7 +186,7 @@ function runSequence() {
 
 function startCast(spell, encoded) {
   const command = decodeCast(encoded);
-  if (!spell || !voice.state.enabled || !isGameActive() || seq) {
+  if (!spell || !voice.state.enabled || !voice.state.voiceReady || !isGameActive() || seq) {
     parentPort.postMessage({ type: 'cast-complete', id: command.id, ok: false, reason: 'Cast not accepted', profile: command.profile, elapsedMs: 0 });
     return;
   }
@@ -258,8 +259,15 @@ try {
         KillTimer(null, seqTimer);
         seqTimer = 0;
         runSequence();
+      } else if (type === WM_APP_TOGGLE) {
+        voice.toggle();
+        if(!voice.state.enabled&&seq)finishSequence(false,'Voice casting disabled');
+      } else if(type===WM_APP_BINDINGS){
+        try{if(seq)throw Error('Cast still active');voice.updateBindings(readBindingUpdate(workerData.bindingBuffer));parentPort.postMessage({type:'bindings-applied',id:wParam,ok:true});}
+        catch(e){parentPort.postMessage({type:'bindings-applied',id:wParam,ok:false,reason:e.message});}
       } else if (type === WM_APP_VOICE_READY) {
         voice.setVoiceReady(wParam === 1);
+        if(wParam!==1&&seq)finishSequence(false,'Microphone unavailable');
       }
     } catch (e) {
       finishSequence(false, e.message);
