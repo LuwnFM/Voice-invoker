@@ -19,6 +19,24 @@ try {
   $model=Join-Path $app 'model\vosk-model-small-ru-invoker.tar.gz'
   $manifest=Get-Content -LiteralPath (Join-Path $app 'model-manifest.json') -Raw | ConvertFrom-Json
   if((Get-FileHash -LiteralPath $model).Hash -ne $manifest.sha256){throw 'Model hash invalid'}
+  $shortcut=Join-Path ([Environment]::GetFolderPath('Programs')) 'Voice Invoker\Voice Invoker.lnk'
+  if(-not (Test-Path -LiteralPath $shortcut)){throw 'Launch shortcut missing'}
+  $link=(New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
+  if($link.TargetPath -ne (Join-Path $dest 'Start Voice Invoker.bat')){throw 'Wrong launch shortcut target'}
+  $pkgPath=Join-Path $app 'package.json'
+  $originalPkg=[IO.File]::ReadAllText($pkgPath)
+  try {
+    $pkg=$originalPkg | ConvertFrom-Json
+    $pkg.main='scripts/lifecycle-entry.js'
+    [IO.File]::WriteAllText($pkgPath,($pkg | ConvertTo-Json -Depth 20))
+    $env:VI_PACKAGED='1'
+    $env:VI_TEST_START_BAT='1'
+    & node (Join-Path $app 'scripts\lifecycle-check.js')
+    if($LASTEXITCODE -ne 0){throw 'Installed launcher lifecycle test failed'}
+  } finally {
+    [IO.File]::WriteAllText($pkgPath,$originalPkg)
+    Remove-Item Env:VI_PACKAGED,Env:VI_TEST_START_BAT -ErrorAction SilentlyContinue
+  }
   $config=Join-Path $app 'config.json'
   $prefs='{"voiceChatKey":"MOUSE4","customSpellPhrases":{"invoker_tornado":["\u0443\u0440\u0430\u0433\u0430\u043d"]},"itemPhrases":{"item_slot_item1":["\u0449\u0438\u0442"]},"testOnly":true}'
   [IO.File]::WriteAllText($config,$prefs)
@@ -37,6 +55,7 @@ try {
   $state=Join-Path $app '.dota-install.json'
   if(-not (Test-Path -LiteralPath $state)){throw 'Backup missing'}
   $backup=[IO.File]::ReadAllText($state)
+  [IO.File]::WriteAllText($model,'damaged V2 fixture')
   Run-Checked $installerPath @('/S',"/D=$dest")
   if([IO.File]::ReadAllText($config) -ne $prefs){throw 'Upgrade lost legacy preferences'}
   if([IO.File]::ReadAllText($migrated) -ne $newPrefs){throw 'Upgrade lost AppData preferences'}
@@ -48,7 +67,7 @@ try {
   if([IO.File]::ReadAllText($config) -ne $prefs){throw 'Uninstall lost legacy preferences'}
   if([IO.File]::ReadAllText($migrated) -ne $newPrefs){throw 'Uninstall lost AppData preferences'}
   if((Get-FileHash -LiteralPath $model).Hash -ne $manifest.sha256){throw 'Uninstall lost model'}
-  Write-Host 'PASS: actual installer, upgrade, retained preferences/model, GSI restore and uninstall'
+  Write-Host 'PASS: actual installer, installed launcher, upgrade, retained preferences, V2 repair, GSI restore and uninstall'
 } finally {
   $env:VI_DATA_DIR=$oldDataDir
   if(Test-Path -LiteralPath $root){Remove-Item -LiteralPath $root -Recurse -Force}

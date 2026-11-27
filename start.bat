@@ -10,7 +10,7 @@ where node >nul 2>&1 || goto error
 where npm >nul 2>&1 || goto error
 node scripts\ensure-runtime.js
 if errorlevel 1 goto error
-call setup-run.bat -Launch
+call setup-run.bat -Launch -NoPrompt
 if errorlevel 1 (
   echo Dota/GSI setup failed. Opening diagnostics instead of closing.
   set "VI_SETUP_FAILED=1"
@@ -20,7 +20,7 @@ node scripts\launch.js --background
 if errorlevel 1 goto error
 exit /b 0
 :packaged
-call setup-run.bat -Launch
+call setup-run.bat -Launch -NoPrompt
 if errorlevel 1 (
   echo Dota/GSI setup failed. Opening diagnostics instead of closing.
   set "VI_SETUP_FAILED=1"

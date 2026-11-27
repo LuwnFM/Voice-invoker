@@ -20,6 +20,7 @@ New-Item -ItemType Directory -Path (Join-Path $app 'node_modules'),(Join-Path $a
 Get-ChildItem -LiteralPath (Join-Path $root 'node_modules') -Force | Where-Object { $_.Name -notin @('electron','.bin','.package-lock.json') } | Copy-Item -Destination (Join-Path $app 'node_modules') -Recurse -Force
 Copy-Item -LiteralPath $model -Destination (Join-Path $app 'model')
 Set-Content -LiteralPath (Join-Path $stage 'Start Voice Invoker.bat') -Encoding Ascii -Value '@echo off','call "%~dp0resources\app\start.bat"'
+if (-not $Installer) {
 $pkgPath = Join-Path $app 'package.json'
 $original = [IO.File]::ReadAllText($pkgPath)
 try {
@@ -37,6 +38,7 @@ foreach ($log in @('log.txt','log.previous.txt','launcher.log')) { Remove-Item -
 $zip = Join-Path $out "VoiceInvoker-Portable-$version.zip"
 & tar.exe -a -cf $zip -C $stage .
 if ($LASTEXITCODE -ne 0) { throw 'Portable archive failed' }
+}
 if ($Installer) {
     $makensis = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'NSIS\makensis.exe'
     if (-not (Test-Path -LiteralPath $makensis)) { throw 'NSIS required' }
@@ -57,8 +59,7 @@ if ($Installer) {
     if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
     & (Join-Path $PSScriptRoot 'installer-smoke.ps1') -Installer $exe
 }
-$packages=@($zip)
-if($Installer){$packages+=@($exe)}
+$packages=if($Installer){@($exe)}else{@($zip)}
 $checksums=@(foreach($package in $packages){(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+[IO.Path]::GetFileName($package)})
 [IO.File]::WriteAllLines((Join-Path $out 'SHA256SUMS.txt'),[string[]]$checksums,[Text.UTF8Encoding]::new($false))
 Write-Host "Windows packages: $out"

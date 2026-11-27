@@ -48,7 +48,9 @@ async function ready(previous=0) {
   assert.deepEqual(pids(),[],'No pre-existing test Electron');
   const args=['-e','require("./scripts/launch").launchBackground(process.argv[1])',packaged?root:path.join(__dirname,'lifecycle-entry.js')];
   const start = () => {
-    const child=spawnSync(launcher,args,{cwd:root,env,encoding:'utf8',timeout:15000});
+    const child=packaged&&process.env.VI_TEST_START_BAT==='1'
+      ?spawnSync('cmd.exe',['/d','/c','start.bat'],{cwd:root,env,encoding:'utf8',timeout:30000})
+      :spawnSync(launcher,args,{cwd:root,env,encoding:'utf8',timeout:15000});
     assert.equal(child.status,0,child.stderr || String(child.error || ''));
     const pid=Number(/supervisor PID (\d+)/.exec(String(child.stdout))?.[1]);
     assert.ok(pid, child.stdout);

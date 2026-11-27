@@ -58,7 +58,7 @@ jobs:
         run: node scripts/fetch-model.js model
       - name: Full Electron lifecycle check
         run: node scripts/lifecycle-check.js
-      - name: Build standalone installer and portable package
+      - name: Build and verify single Windows installer
         if: matrix.node == '22'
         shell: powershell
         run: |
@@ -72,18 +72,10 @@ jobs:
         with:
           name: windows-packages
           path: |
-            build-output/VoiceInvoker-Portable-*.zip
             build-output/VoiceInvoker-Setup-*.exe
             build-output/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@v4
-        if: matrix.node == '22'
-        with:
-          name: invoker-v2
-          path: model/vosk-model-small-ru-invoker.tar.gz
-          if-no-files-found: error
-          retention-days: 2
 
   publish-rc:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -98,17 +90,11 @@ jobs:
           node-version: '22'
       - uses: actions/download-artifact@v4
         with:
-          name: invoker-v2
-          path: model
-      - uses: actions/download-artifact@v4
-        with:
           name: windows-packages
           path: windows-packages
-      - name: Verify release model
-        run: node scripts/fetch-model.js model
       - name: Verify Windows package checksums
         run: cd windows-packages && sha256sum --check SHA256SUMS.txt
-      - name: Publish release candidate with model
+      - name: Publish single Windows installer
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -121,4 +107,10 @@ jobs:
             echo "Release $tag already exists; not overwriting."
             exit 0
           fi
-          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz windows-packages/*.zip windows-packages/*.exe windows-packages/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.1 (verification build)" --notes-file RELEASE_NOTES.md
+          installer="windows-packages/VoiceInvoker-Setup-1.1.1.exe"
+          test -f "$installer"
+          cp RELEASE_NOTES.md release-notes.txt
+          printf '\n## SHA-256\n\n```text\n' >> release-notes.txt
+          cat windows-packages/SHA256SUMS.txt >> release-notes.txt
+          printf '```\n' >> release-notes.txt
+          gh release create "$tag" "$installer" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.1 (verification build)" --notes-file release-notes.txt
