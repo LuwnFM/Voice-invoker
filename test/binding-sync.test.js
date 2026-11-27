@@ -23,7 +23,7 @@ test('hook uses new keys and retains toggle and profile state',()=>{
 test('watcher reads atomic file replacement and closes',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'vi-watch-'));const file=path.join(dir,'dotakeys_personal.lst');
  const v=k=>'"KeyBindings" { "Keys" { "AbilityPrimary1" { "Key" "'+k+'" } } }';
- fs.writeFileSync(file,v('Q'));let watcher,timer;
+ fs.writeFileSync(file,v('Q'));let watcher={close(){}},timer;
  try{await new Promise((resolve,reject)=>{
   timer=setTimeout(()=>reject(Error('watch timeout')),5000);
   watcher=watchBindingFile(file,b=>{if(b.keys.quas==='Q'){fs.writeFileSync(file+'.tmp',v('A'));fs.renameSync(file+'.tmp',file);}else if(b.keys.quas==='A')resolve();},reject,30);

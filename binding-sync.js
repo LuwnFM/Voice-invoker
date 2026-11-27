@@ -26,7 +26,7 @@ function watchBindingFile(file,onRead,onError,delay=350){
  watcher.on('error',e=>{close();onError(e);});
  function close(){closed=true;clearTimeout(timer);watcher?.close();}
  change();
- return {close};
+ return {close,refresh:change,get closed(){return closed;}};
 }
 const BUFFER_SIZE=16384;
 function writeBindingUpdate(shared,patch){

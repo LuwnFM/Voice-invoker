@@ -560,7 +560,7 @@ function settingsData() {
 // Берём из присланного только известные поля с допустимыми значениями и дописываем их
 // в config.json, не трогая остальное (свои фразы, паузы и т.д.)
 function saveSettings(body) {
-  if(bindingInFlight)throw Error('Подожди завершения синхронизации клавиш.');
+  if(bindingInFlight||bindingPending)throw Error('Подожди завершения синхронизации клавиш.');
   if(body.bindingGeneration!==undefined&&body.bindingGeneration!==bindingGeneration)throw Error('Клавиши изменились. Считай их заново перед сохранением.');
   const out = { ...userConfig };
   for(const k of ['autoSyncBindings','syncQuickcast','bindingNotifications'])if(typeof body[k]==='boolean')out[k]=body[k];
@@ -587,9 +587,11 @@ function saveSettings(body) {
   out.disabledPhrases=commands.disabledPhrases;
   if(body.itemCastModes!==undefined)out.itemCastModes=validateItemCastModes(body.itemCastModes);
   saveJsonAtomic(CONFIG_FILE, out);
+  const syncOptionsChanged=out.autoSyncBindings!==userConfig.autoSyncBindings||out.syncQuickcast!==userConfig.syncQuickcast;
   userConfig = out;
   configInvalid=false;
   if(out.autoSyncBindings===false){bindingPending=null;clearTimeout(bindingRetry);}
+  else if(syncOptionsChanged){lastBindingSignature=null;bindingWatcher?.refresh();}
   log('Настройки сохранены в config.json');
 }
 
@@ -674,7 +676,7 @@ function onBindingRead(bindings){
     if((userConfig.keys&&differs({...config.keys,...userConfig.keys},config.keys))||(userConfig.voiceChatKey&&userConfig.voiceChatKey!==config.voiceChatKey)||(userConfig.slotCastModes&&differs(userConfig.slotCastModes,config.slotCastModes||{})))throw Error('Есть сохранённые настройки, ожидающие перезапуска.');
     const patch=bindingUpdate(bindings,config,userConfig.syncQuickcast!==false);
     if(!bindingInFlight&&!differs(patch.keys,config.keys)&&patch.voiceChatKey===config.voiceChatKey&&!differs(patch.slotCastModes,config.slotCastModes||{})){bindingPending=null;bindingsChanged=false;return;}
-    bindingPending=patch;bindingsChanged=true;bindingNotice='Ожидается завершение текущего каста.';maybeApplyBindings();
+    bindingPending=patch;queue.length=0;bindingsChanged=true;bindingNotice='Ожидается завершение текущего каста.';maybeApplyBindings();
   }catch(e){bindingPending=null;bindingAlert('Бинды не изменены: '+e.message);}
 }
 async function watchBindings(force=false){
@@ -683,11 +685,12 @@ async function watchBindings(force=false){
   try{
     const proc=await processStatus(force);
     if(shutdown)return;
-    const file=proc.bindingFile||null;
-    if(file===watchedBindingFile&&bindingWatcher)return;
+    // Lifecycle CI uses a private fixture, never a Steam account.
+    const file=(process.env.VI_LIFECYCLE_DIR&&process.env.VI_BINDINGS_FILE)||proc.bindingFile||null;
+    if(file===watchedBindingFile&&bindingWatcher&&!bindingWatcher.closed){if(force)bindingWatcher.refresh();return;}
     bindingWatcher?.close();bindingWatcher=null;watchedBindingFile=file;lastBindingSignature=null;latestBindings=null;bindingPending=null;
     if(!file)return;
-    bindingWatcher=watchBindingFile(file,onBindingRead,e=>{latestBindings=null;bindingAlert('Не удалось прочитать бинды Dota: '+e.message);});
+    bindingWatcher=watchBindingFile(file,onBindingRead,e=>{latestBindings=null;bindingPending=null;bindingAlert('Не удалось прочитать бинды Dota: '+e.message);});
   }catch(e){bindingAlert('Наблюдение за биндами недоступно: '+e.message);}
   finally{checkingBindings=false;}
 }
@@ -706,13 +709,13 @@ async function diagnostics() {
     installed=!!gsiPath&&fs.existsSync(gsiPath);
     if(installed){const raw=fs.readFileSync(gsiPath,'utf8');cfgMatches=raw.includes('http://127.0.0.1:'+config.port+'/gsi')&&raw.includes('"'+config.authToken+'"');itemsConfigured=/"items"\s*"1"/.test(raw);}
   }catch{}
-  const binds=proc.bindingFile===watchedBindingFile&&latestBindings?latestBindings:proc.bindings;
+  const binds=watchedBindingFile?latestBindings:proc.bindings;
   const required=['quas','wex','exort','invoke','slot1','slot2','voice'];
   const bindingMatches=binds ? required.every(k=>!!binds.keys[k]) && Object.entries(binds.keys).every(([key,value])=>(key==='voice'?config.voiceChatKey:config.keys[key])===value) && Object.entries(binds.slotCastModes).every(([key,value])=>(config.slotCastModes?.[key]||(ITEM_KEYS.includes(key)?'quickcast':config.castMode))===value) : null;
   const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
   const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
   const abilities=gsi?Object.fromEntries(Object.values(gsi.abilities).filter(a=>gameName(a.name)).map(a=>[a.name,{level:Number.isFinite(a.level)?a.level:null,cooldown:Number.isFinite(a.cooldown)?a.cooldown:null,canCast:a.can_cast===true}])):null;
-  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingGeneration,bindingNotice,bindingsChanged,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,slotCastModes:config.slotCastModes||{},bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
+  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingGeneration,bindingNotice,bindingsChanged,bindingWatching:!!bindingWatcher&&!bindingWatcher.closed,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,slotCastModes:config.slotCastModes||{},bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
 }
 let settingsWin = null;
 function openStartupDiagnostics(){

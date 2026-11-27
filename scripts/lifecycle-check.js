@@ -12,9 +12,12 @@ const config = path.join(root,'config.json');
 const original = fs.readFileSync(config,'utf8');
 const dataDir=path.join(dir,'user-data');
 const migratedConfig=path.join(dataDir,'config.json');
+const bindingFile=path.join(dir,'dotakeys_personal.lst');
+const bindingFixture=(quas,voice)=>'"KeyBindings" { "Keys" { '+Object.entries({AbilityPrimary1:quas,AbilityPrimary2:'W',AbilityPrimary3:'E',AbilityUltimate:'R',AbilitySecondary1:'D',AbilitySecondary2:'F',ChatVoiceTeam:voice}).map(([action,key])=>'"'+action+'" { "Key" "'+key+'" }').join(' ')+' } }';
+fs.writeFileSync(bindingFile,bindingFixture('Q','G'));
 const base = 'http://127.0.0.1:3055';
 /** @type {NodeJS.ProcessEnv} */
-const env = {...process.env, VI_LIFECYCLE_DIR:dir, VI_EXE:exe, VI_DATA_DIR:dataDir};
+const env = {...process.env, VI_LIFECYCLE_DIR:dir, VI_EXE:exe, VI_DATA_DIR:dataDir, VI_BINDINGS_FILE:bindingFile};
 if(packaged)env.ELECTRON_RUN_AS_NODE='1';else delete env.ELECTRON_RUN_AS_NODE;
 const pause = ms => new Promise(resolve=>setTimeout(resolve,ms));
 function pids() {
@@ -62,6 +65,15 @@ async function ready(previous=0) {
   await waitFor('duplicate opens settings',()=>fs.existsSync(path.join(dir,'settings-'+first)));
   await waitFor('original-style diagnostic controls rendered',()=>fs.existsSync(path.join(dir,'diagnostics-ui-'+first)));
   console.log('Duplicate launch: existing instance settings and diagnostic controls visible');
+  await waitFor('watcher registered',async()=> (await (await fetch(base+'/diagnostics')).json()).bindingWatching);
+  fs.writeFileSync(bindingFile+'.tmp',bindingFixture('A','T'));fs.renameSync(bindingFile+'.tmp',bindingFile);
+  await waitFor('live binding acknowledgement and persistence',async()=>{const c=await (await fetch(base+'/config')).json();return c.bindingGeneration>0&&c.keys.quas==='A'&&c.voiceChatKey==='T'&&JSON.parse(fs.readFileSync(migratedConfig,'utf8')).keys.quas==='A';});
+  assert.equal(pid(),first,'Binding sync must not restart Electron');
+  fs.writeFileSync(bindingFile,bindingFixture('A','A'));
+  await waitFor('conflicting binding rejected',async()=> (await (await fetch(base+'/diagnostics')).json()).bindingNotice.includes('Конфликт'));
+  assert.equal((await (await fetch(base+'/config')).json()).voiceChatKey,'T');
+  fs.writeFileSync(bindingFile,bindingFixture('A','T'));
+  console.log('PASS: live file replacement, native acknowledgement, persistence and conflicting binding rejection without Electron restart');
   const reportResponse=await fetch(base+'/copy-report',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(reportResponse.status,204);
   // Disabled aliases must disappear from the live grammar after restart.
   const preferences=await (await fetch(base+'/config')).json();
@@ -103,7 +115,7 @@ async function ready(previous=0) {
   const foreign=await fetch(base+'/voice',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://example.invalid'},body:JSON.stringify({texts:['торнадо']})});assert.equal(foreign.status,403);
   const invalid=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:'null'});assert.equal(invalid.status,400);
   const oversized=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({padding:'x'.repeat(256*1024)})});assert.equal(oversized.status,413);
-  const keysConflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:{item1:'Q'}})});assert.equal(keysConflict.status,500);
+  const keysConflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:{item1:'A'}})});assert.equal(keysConflict.status,500);
   const testResult=await fetch(base+'/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texts:['торнадо']})});assert.equal(testResult.status,204);
   const checked=await (await fetch(base+'/diagnostics')).json();assert.deepEqual(checked.lastTest.matched,['торнадо']);
   assert.ok(!fs.readFileSync(path.join(dataDir,'log.txt'),'utf8').includes('"торнадо" ->'));
