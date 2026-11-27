@@ -7,9 +7,10 @@ const koffi = require('koffi');
 const SPELLS = [...require('./spells'), ...require('./items').ITEM_SLOTS];
 const { createVoiceCast } = require('./logic');
 const { decodeCast } = require('./timing-profiles');
-const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST, WM_APP_TOGGLE } = require('./messages');
+const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST, WM_APP_TOGGLE, WM_APP_BINDINGS } = require('./messages');
 
 const config = workerData.config;
+const {readBindingUpdate}=require('./binding-sync');
 const user32 = koffi.load('user32.dll');
 const kernel32 = koffi.load('kernel32.dll');
 
@@ -261,6 +262,9 @@ try {
       } else if (type === WM_APP_TOGGLE) {
         voice.toggle();
         if(!voice.state.enabled&&seq)finishSequence(false,'Voice casting disabled');
+      } else if(type===WM_APP_BINDINGS){
+        try{if(seq)throw Error('Cast still active');voice.updateBindings(readBindingUpdate(workerData.bindingBuffer));parentPort.postMessage({type:'bindings-applied',id:wParam,ok:true});}
+        catch(e){parentPort.postMessage({type:'bindings-applied',id:wParam,ok:false,reason:e.message});}
       } else if (type === WM_APP_VOICE_READY) {
         voice.setVoiceReady(wParam === 1);
         if(wParam!==1&&seq)finishSequence(false,'Microphone unavailable');

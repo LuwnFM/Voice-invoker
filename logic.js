@@ -44,8 +44,8 @@ function vkOf(key) {
 
 function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () => {} }) {
   const orbKey = { Q: config.keys.quas, W: config.keys.wex, E: config.keys.exort };
-  const talkVk = vkOf(config.voiceChatKey);
-  const always = config.listen === 'always' || !talkVk;
+  let talkVk = vkOf(config.voiceChatKey);
+  let always = config.listen === 'always' || !talkVk;
   // config.blockKeys — имена из config.keys, например ["invoke"] или ["invoke", "slot1", "slot2"]
   const blockedVk = new Set((config.blockKeys || []).map((name) => vkOf(config.keys[name])).filter(Boolean));
 
@@ -169,7 +169,17 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
     return steps;
   }
 
-  return { handleKey, setVoiceReady, buildSequence, state: s, send, toggle };
+  function updateBindings(patch){
+    // Retain held/swallowed keys, chat, enabled state and selected timing profile.
+    Object.assign(config,patch);
+    Object.assign(orbKey,{Q:config.keys.quas,W:config.keys.wex,E:config.keys.exort});
+    talkVk=vkOf(config.voiceChatKey);always=config.listen==='always'||!talkVk;
+    blockedVk.clear();for(const name of config.blockKeys||[]){const vk=vkOf(config.keys[name]);if(vk)blockedVk.add(vk);}
+    s.talkKey=always?'':String(config.voiceChatKey).toUpperCase();
+    s.listening=always;
+    send('bindings');
+  }
+  return { handleKey, setVoiceReady, buildSequence, state: s, send, toggle, updateBindings };
 }
 
 module.exports = { createVoiceCast, vkOf, ACTION };
