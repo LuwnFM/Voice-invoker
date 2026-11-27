@@ -19,6 +19,12 @@ test('hook uses new keys and retains toggle and profile state',()=>{
  assert.equal(voice.buildSequence(spell,ACTION.PREPARE)[0].vk,vkOf('A'));
  voice.handleKey(vkOf('G'),true);assert.equal(voice.state.listening,false);
  voice.handleKey(vkOf('T'),true);assert.equal(voice.state.listening,true);
+ voice.handleKey(vkOf('T'),false);
+ assert.equal(voice.handleKey(vkOf('R'),true),true);
+ voice.updateBindings({...bindingUpdate(input,base),keys:{...bindingUpdate(input,base).keys,invoke:'B'}});
+ assert.equal(voice.handleKey(vkOf('R'),false),true,'Previously swallowed key-up must stay swallowed');
+ assert.equal(voice.handleKey(vkOf('R'),true),false);
+ assert.equal(voice.handleKey(vkOf('B'),true),true);
 });
 test('watcher reads atomic file replacement and closes',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'vi-watch-'));const file=path.join(dir,'dotakeys_personal.lst');
