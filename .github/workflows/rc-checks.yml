@@ -30,9 +30,8 @@ jobs:
         run: |
           node -e "const r=require('node:child_process').spawnSync('node_modules/electron/dist/electron.exe',['scripts/hook-smoke.js'],{env:{...process.env,ELECTRON_RUN_AS_NODE:'1'},stdio:'inherit',timeout:60000});if(r.error)console.error(r.error);process.exit(r.status===0?0:1)"
           if ($LASTEXITCODE -ne 0) { throw 'Native hook smoke test failed' }
-      - name: Dependency audit (report only)
-        run: npm audit --json
-        continue-on-error: true
+      - name: Dependency audit (moderate or higher blocks release)
+        run: npm audit --audit-level=moderate
       - run: npm test
       - name: Check application JavaScript and inline scripts
         shell: pwsh
