@@ -92,7 +92,9 @@ $target = Join-Path $folder $cfgName
 $source = Get-Content -LiteralPath (Join-Path $root $cfgName) -Raw
 $port = 3055
 $token = 'voice_invoke'
-$configPath = Join-Path $root 'config.json'
+$dataDir = if ($env:VI_DATA_DIR) { $env:VI_DATA_DIR } else { Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'VoiceInvoker' }
+$configPath = Join-Path $dataDir 'config.json'
+if (-not (Test-Path -LiteralPath $configPath)) { $configPath = Join-Path $root 'config.json' }
 if (Test-Path -LiteralPath $configPath) {
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     if ($null -ne $config.port) { $port = [int]$config.port }

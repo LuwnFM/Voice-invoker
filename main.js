@@ -104,7 +104,14 @@ const config = {
 const EXTRA_PHRASES = require('./extra-phrases.json');
 const { catalog, exclusions, mergeCatalog } = require('./phrase-preferences');
 const { experimentalModel } = require('./experimental-model');
-const CONFIG_FILE = path.join(__dirname, 'config.json');
+const {initializeUserData}=require('./user-data');
+let DATA_DIR;
+try {DATA_DIR=initializeUserData(__dirname);}
+catch(e){
+ dialog.showErrorBox('Voice Invoker — ошибка данных','Не удалось открыть папку пользовательских данных: '+e.message+'\nСтарые настройки не удалены.');
+ process.exit(1);
+}
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 /** User configuration is extensible JSON; accepted settings are validated before saving. @type {Record<string, any>} */
 let userConfig = {};
 let configInvalid=false, configBackup=false;
@@ -154,9 +161,9 @@ function configurePhrases(useExpanded) {
 }
 
 // Лог идёт в консоль и в файл log.txt (перезаписывается при каждом запуске)
-const LOG_FILE = path.join(__dirname, 'log.txt');
+const LOG_FILE = path.join(DATA_DIR, 'log.txt');
 try {
-  if (fs.existsSync(LOG_FILE)) fs.copyFileSync(LOG_FILE, path.join(__dirname, 'log.previous.txt'));
+  if (fs.existsSync(LOG_FILE)) fs.copyFileSync(LOG_FILE, path.join(DATA_DIR, 'log.previous.txt'));
   fs.writeFileSync(LOG_FILE, '');
 } catch {}
 function log(...a) {
@@ -632,7 +639,7 @@ async function diagnostics() {
   const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default'};
   const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
   const abilities=gsi?Object.fromEntries(Object.values(gsi.abilities).filter(a=>gameName(a.name)).map(a=>[a.name,{level:Number.isFinite(a.level)?a.level:null,cooldown:Number.isFinite(a.cooldown)?a.cooldown:null,canCast:a.can_cast===true}])):null;
-  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,lastCastStatus,effectiveSettings};
+  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,lastCastStatus,effectiveSettings};
 }
 let settingsWin = null;
 function openSettings() {
@@ -692,7 +699,7 @@ async function handleRequest(req,res){
     res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify(await repairGsi(p==='/pick-dota')));
   }
   if (p === '/open-logs' && req.method === 'POST') {
-    await shell.openPath(__dirname);return done();
+    const error=await shell.openPath(DATA_DIR);if(error){res.writeHead(500);return res.end();}return done();
   }
   if (p === '/import-bindings' && req.method === 'POST') {
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
@@ -874,7 +881,7 @@ async function createTray() {
       { label: 'Включить / выключить распознавание', click: () => toHook(WM_APP_TOGGLE,0) },
       { label: 'Перезапустить', click: () => requestShutdown(true) },
       { label: 'Открыть журнал', click: () => shell.openPath(LOG_FILE).then(error => { if (error) log(error); }) },
-      { label: 'Папка журналов', click: () => shell.openPath(__dirname) },
+      { label: 'Папка журналов', click: () => shell.openPath(DATA_DIR) },
       { type: 'separator' },
       { label: 'Выйти из Voice Invoker', click: () => requestShutdown(false) },
     ]));

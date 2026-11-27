@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const root = path.resolve(__dirname, '..');
 const RESTART = 75;
+const {initializeUserData}=require('../user-data');
 function launch(entry = root, reopen = false) {
   /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, VI_SUPERVISED: '1', VI_REOPEN_SETTINGS: reopen ? '1' : '0' };
@@ -21,7 +22,8 @@ function launch(entry = root, reopen = false) {
 // Detached supervisor has no inherited console or pipe handles. Its diagnostic
 // output survives closing the original terminal. It exits when Electron exits.
 function launchBackground(entry = root) {
-  const fd = fs.openSync(path.join(root, 'launcher.log'), 'a');
+  const dir=initializeUserData(root);
+  const fd = fs.openSync(path.join(dir, 'launcher.log'), 'a');
   let child;
   try {
     child = spawn(process.execPath, ['-e', 'require("./scripts/launch").launch(process.argv[1])', entry], {

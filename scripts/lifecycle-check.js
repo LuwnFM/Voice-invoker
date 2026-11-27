@@ -10,9 +10,11 @@ const launcher=packaged?exe:process.execPath;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(),'vi-lifecycle-'));
 const config = path.join(root,'config.json');
 const original = fs.readFileSync(config,'utf8');
+const dataDir=path.join(dir,'user-data');
+const migratedConfig=path.join(dataDir,'config.json');
 const base = 'http://127.0.0.1:3055';
 /** @type {NodeJS.ProcessEnv} */
-const env = {...process.env, VI_LIFECYCLE_DIR:dir, VI_EXE:exe};
+const env = {...process.env, VI_LIFECYCLE_DIR:dir, VI_EXE:exe, VI_DATA_DIR:dataDir};
 if(packaged)env.ELECTRON_RUN_AS_NODE='1';else delete env.ELECTRON_RUN_AS_NODE;
 const pause = ms => new Promise(resolve=>setTimeout(resolve,ms));
 function pids() {
@@ -34,7 +36,7 @@ async function ready(previous=0) {
     if(!current||current===previous||!pids().includes(current))return false;
     const r=await fetch(base+'/config',{signal:AbortSignal.timeout(2000)});
     if(!r.ok)return false;
-    const log=fs.readFileSync(path.join(root,'log.txt'),'utf8');
+    const log=fs.readFileSync(path.join(dataDir,'log.txt'),'utf8');
     return log.includes('Хук клавиатуры установлен')&&current;
   });
 }
@@ -52,6 +54,8 @@ async function ready(previous=0) {
   const supervisor=start();
   console.log('Initial launcher exited, detached supervisor PID',supervisor);
   const first=await ready();
+  const legacy=fs.readFileSync(config,'utf8');
+  assert.equal(fs.readFileSync(migratedConfig,'utf8'),legacy,'Legacy RC6/RC7 config migration failed');
   console.log('Initial Electron PID',first,'processes',pids());
   const duplicate=start();
   assert.equal(pid(),first);
@@ -70,12 +74,14 @@ async function ready(previous=0) {
   assert.equal(Object.keys(aliases).length,11);assert.ok(Object.values(aliases).flat().every(w=>typeof w==='string'&&dictionary.has(w)));
   const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,customSpellPhrases:aliases,itemPhrases:{item_slot_item1:['прыжок','эмп'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
   assert.equal(saved.status,200);
+  assert.equal(fs.readFileSync(config,'utf8'),legacy,'Migrating preferences must not overwrite legacy config');
+  assert.equal(JSON.parse(fs.readFileSync(migratedConfig,'utf8')).testOnly,true);
   const r=await fetch(base+'/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   assert.equal(r.status,204);
   const second=await ready(first);
   await waitFor('old main process gone',()=>!pids().includes(first));
   await waitFor('settings reopen after restart',()=>fs.existsSync(path.join(dir,'settings-'+second)));
-  assert.ok(!fs.readFileSync(path.join(root,'log.txt'),'utf8').includes('Скачиваю модель Invoker V2'));
+  assert.ok(!fs.readFileSync(path.join(dataDir,'log.txt'),'utf8').includes('Скачиваю модель Invoker V2'));
   const grammar=await (await fetch(base+'/grammar')).json();
   assert.ok(preferences.phraseCatalog.invoker_emp.filter(p=>p!=='эмп').every(p=>!grammar.includes(p)));
   assert.ok(grammar.includes('эмп'),'Disabled EMP alias reused for item');
@@ -98,7 +104,7 @@ async function ready(previous=0) {
   const keysConflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:{item1:'Q'}})});assert.equal(keysConflict.status,500);
   const testResult=await fetch(base+'/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texts:['торнадо']})});assert.equal(testResult.status,204);
   const checked=await (await fetch(base+'/diagnostics')).json();assert.deepEqual(checked.lastTest.matched,['торнадо']);
-  assert.ok(!fs.readFileSync(path.join(root,'log.txt'),'utf8').includes('"торнадо" ->'));
+  assert.ok(!fs.readFileSync(path.join(dataDir,'log.txt'),'utf8').includes('"торнадо" ->'));
   console.log('Disabled aliases persisted, test mode records match without dispatch');
   console.log('Restarted Electron PID',second,'processes',pids());
   fs.writeFileSync(path.join(dir,'quit-'+second),'quit');
