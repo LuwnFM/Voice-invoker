@@ -8,7 +8,9 @@ $env:VI_DATA_DIR=Join-Path $root 'User Data'
 $dota=Join-Path $root 'Fake Dota'
 $cfg=Join-Path $dota 'game\dota\cfg\gamestate_integration\gamestate_integration_voice_invoke.cfg'
 function Run-Checked([string]$Exe,[string[]]$Arguments){
-  $p=Start-Process -FilePath $Exe -ArgumentList $Arguments -Wait -PassThru
+  Write-Host ('['+(Get-Date -Format o)+'] Running: '+[IO.Path]::GetFileName($Exe))
+  $p=Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
+  if(-not $p.WaitForExit(180000)){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue;throw "Timed out: $Exe"}
   if($p.ExitCode -ne 0){throw "$Exe returned $($p.ExitCode)"}
 }
 try {
@@ -16,6 +18,13 @@ try {
   $installerPath=(Resolve-Path -LiteralPath $Installer).Path
   Run-Checked $installerPath @('/S',"/D=$dest")
   if(-not (Test-Path -LiteralPath (Join-Path $dest 'VoiceInvoker.exe'))){throw 'EXE missing'}
+  Write-Host 'Checking installed embedded runtime and model'
+  $oldRunAsNode=$env:ELECTRON_RUN_AS_NODE
+  try {
+    $env:ELECTRON_RUN_AS_NODE='1'
+    Push-Location $app
+    try { Run-Checked (Join-Path $dest 'VoiceInvoker.exe') @('scripts\check-packaged-runtime.js','--strict-model') } finally { Pop-Location }
+  } finally { $env:ELECTRON_RUN_AS_NODE=$oldRunAsNode }
   $model=Join-Path $app 'model\vosk-model-small-ru-invoker.tar.gz'
   $manifest=Get-Content -LiteralPath (Join-Path $app 'model-manifest.json') -Raw | ConvertFrom-Json
   if((Get-FileHash -LiteralPath $model).Hash -ne $manifest.sha256){throw 'Model hash invalid'}

@@ -5,6 +5,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+concurrency:
+  group: rc-checks-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 permissions:
   contents: read
 jobs:
@@ -16,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         node: ['22', '26']
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,7 +61,7 @@ jobs:
         run: node scripts/fetch-model.js model
       - name: Full Electron lifecycle check
         run: node scripts/lifecycle-check.js
-      - name: Build and verify single Windows installer
+      - name: Compile single NSIS installer
         if: matrix.node == '22'
         shell: powershell
         run: |
@@ -66,7 +69,12 @@ jobs:
             choco install nsis --version=3.11 -y --no-progress
             if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
           }
-          .\scripts\build-windows.ps1 -Installer
+          .\scripts\build-windows.ps1 -Installer -SkipInstallerSmoke
+      - name: Test installed EXE and launcher without system Node on PATH
+        if: matrix.node == '22'
+        timeout-minutes: 8
+        shell: powershell
+        run: .\scripts\installer-smoke.ps1 -Installer (Get-Item build-output/VoiceInvoker-Setup-1.1.1.exe).FullName
       - uses: actions/upload-artifact@v4
         if: matrix.node == '22'
         with:

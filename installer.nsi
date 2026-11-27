@@ -1,5 +1,7 @@
 ﻿Unicode true
 !include "LogicLib.nsh"
+!include "x64.nsh"
+!include "WinVer.nsh"
 !include "MUI2.nsh"
 Name "Voice Invoker ${VERSION}"
 OutFile "${OUTFILE}"
@@ -16,6 +18,18 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "Russian"
+Function .onInit
+  ${IfNot} ${RunningX64}
+    MessageBox MB_ICONSTOP "Voice Invoker requires Windows x64."
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+  ${IfNot} ${AtLeastWin10}
+    MessageBox MB_ICONSTOP "Voice Invoker requires Windows 10 or later."
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+FunctionEnd
 Function LaunchVoiceInvoker
   SetOutPath "$INSTDIR"
   ExecShell "open" "$INSTDIR\Start Voice Invoker.bat"
@@ -25,7 +39,8 @@ FunctionEnd
   Pop $0
   Pop $1
   ${If} $0 != "0"
-    MessageBox MB_ICONEXCLAMATION "Close Voice Invoker from the system tray before continuing."
+    MessageBox MB_ICONEXCLAMATION "Close Voice Invoker from the system tray before continuing." /SD IDOK
+    SetErrorLevel 1
     Abort
   ${EndIf}
 !macroend
@@ -58,7 +73,8 @@ Section "Uninstall"
   IfFileExists "$INSTDIR\resources\app\.dota-install.json" 0 skipGsi
   ExecWait 'powershell.exe -NoProfile -File "$INSTDIR\resources\app\setup-dota.ps1" -Uninstall' $0
   ${If} $0 != "0"
-    MessageBox MB_ICONEXCLAMATION "Could not restore the GSI backup. Nothing removed."
+    MessageBox MB_ICONEXCLAMATION "Could not restore the GSI backup. Nothing removed." /SD IDOK
+    SetErrorLevel 1
     Abort
   ${EndIf}
   skipGsi:

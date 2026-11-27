@@ -49,7 +49,7 @@ async function ready(previous=0) {
   const args=['-e','require("./scripts/launch").launchBackground(process.argv[1])',packaged?root:path.join(__dirname,'lifecycle-entry.js')];
   const start = () => {
     const child=packaged&&process.env.VI_TEST_START_BAT==='1'
-      ?spawnSync('cmd.exe',['/d','/c','start.bat'],{cwd:root,env,encoding:'utf8',timeout:30000})
+      ?spawnSync('cmd.exe',['/d','/c','start.bat'],{cwd:root,env:{...env,PATH:[path.join(process.env.SystemRoot||'C:\\Windows','System32'),path.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0'),process.env.SystemRoot||'C:\\Windows'].join(';')},encoding:'utf8',timeout:45000})
       :spawnSync(launcher,args,{cwd:root,env,encoding:'utf8',timeout:15000});
     assert.equal(child.status,0,child.stderr || String(child.error || ''));
     const pid=Number(/supervisor PID (\d+)/.exec(String(child.stdout))?.[1]);

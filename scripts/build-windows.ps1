@@ -1,4 +1,4 @@
-param([switch]$Installer)
+param([switch]$Installer,[switch]$SkipInstallerSmoke)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $out = Join-Path $root 'build-output'
@@ -55,9 +55,11 @@ if ($Installer) {
     }
     [IO.File]::WriteAllLines($remove,[string[]]$lines,[Text.UTF8Encoding]::new($false))
     $exe = Join-Path $out "VoiceInvoker-Setup-$version.exe"
+    Write-Host ('['+(Get-Date -Format o)+'] NSIS compression started')
     & $makensis "/DVERSION=$version" "/DSTAGE=$stage" "/DOUTFILE=$exe" "/DREMOVEFILES=$remove" "/DICONFILE=$iconFile" (Join-Path $root 'installer.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
-    & (Join-Path $PSScriptRoot 'installer-smoke.ps1') -Installer $exe
+    Write-Host ('['+(Get-Date -Format o)+'] NSIS compression completed')
+    if(-not $SkipInstallerSmoke){& (Join-Path $PSScriptRoot 'installer-smoke.ps1') -Installer $exe}
 }
 $packages=if($Installer){@($exe)}else{@($zip)}
 $checksums=@(foreach($package in $packages){(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+[IO.Path]::GetFileName($package)})
