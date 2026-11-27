@@ -534,12 +534,12 @@ const okKey = (k) => typeof k === 'string' && vkOf(k) > 0;
 
 function settingsData() {
   return {
-    keys: config.keys,
-    voiceChatKey: config.voiceChatKey,
-    castMode: config.castMode,
-    listen: config.listen,
-    blockKeys: config.blockKeys || [],
-    microphone: config.microphone || '',
+    keys: {...config.keys,...userConfig.keys},
+    voiceChatKey: userConfig.voiceChatKey??config.voiceChatKey,
+    castMode: userConfig.castMode??config.castMode,
+    listen: userConfig.listen??config.listen,
+    blockKeys: userConfig.blockKeys??config.blockKeys??[],
+    microphone: userConfig.microphone??config.microphone??'',
     phraseCatalog: allPhrases,
     customSpellPhrases: userConfig.customSpellPhrases||{},
     disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, mergeCatalog(allPhrases,userConfig.customSpellPhrases)),
@@ -787,6 +787,7 @@ async function handleRequest(req,res){
       lastTest = {...lastTest,matched:(Array.isArray(texts)?texts:[text]).map(t=>String(t||'').slice(0,200)).slice(0,20), at:Date.now()};
       return done();
     }
+    if(!voiceReady)return done();
     for (const t of (Array.isArray(texts) ? texts : [text]).slice(0,32)) if(typeof t==='string'&&t.length<=200)castByPhrase(t.trim().toLowerCase());
     return done();
   }
@@ -798,7 +799,10 @@ async function handleRequest(req,res){
     const { ready, message } = await readJson(req);
     if (message) log('Голос:', message);
     voiceReady = ready === true;
-    if(!voiceReady)discardWaiting();
+    if(!voiceReady){
+      discardWaiting();
+      if(last){last={state:{...last.state,voiceReady:false}};broadcast({...last,event:'voice'});}
+    }
     voiceInfo = {ready:voiceReady,message:String(message||'')};
     if(voiceReady)voiceEverReady=true;
     else if(!voiceEverReady&&message)openStartupDiagnostics();

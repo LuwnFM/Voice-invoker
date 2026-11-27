@@ -203,6 +203,7 @@
   let lastMeterAt = 0;
   let prerollSamples = 0;
   let audioCtx;
+  let captureReady=false, captureStream=null, captureSource=null, captureNode=null;
   let rec = null;                       // активный распознаватель
   let flushing = [];                    // распознаватели, от которых ждём итог после отпускания клавиши
   let flushTimer = null;
@@ -245,6 +246,25 @@
     return { stream, micNote: note };
   }
 
+  // A lost input is not a normal push-to-talk release: never flush pending
+  // recognition results into the cast queue when the device has disappeared.
+  function abortRecognition(){
+    listening=false;
+    const old=rec;rec=null;flushing=[];
+    clearTimeout(flushTimer);flushTimer=null;
+    preroll.length=0;prerollSamples=0;resetUtterance();
+    try{old?.remove();}catch{}
+  }
+  function stopCapture(message){
+    captureReady=false;abortRecognition();
+    captureStream?.getTracks().forEach(t=>t.stop());
+    try{captureSource?.disconnect();captureNode?.disconnect();}catch{}
+    captureStream=captureSource=captureNode=null;
+    if(audioCtx&&audioCtx.state!=='closed')audioCtx.close().catch(()=>{});
+    $('level').style.width='0';
+    if(message){setStatus('🎤 '+message,true);void voiceStatus(false,message);}
+  }
+  window.addEventListener('pagehide',()=>stopCapture(''));
   async function initVoice() {
     try {
       setStatus('🎤 Загрузка модели распознавания...');
@@ -254,9 +274,12 @@
       parse = createPhraseParser(grammar);
       model = await Vosk.createModel(location.origin + MODEL);
       const { stream, micNote } = await openMic();
+      captureStream=stream;
+      for(const track of stream.getAudioTracks())track.addEventListener('ended',()=>stopCapture('Микрофон отключён. Проверь устройство и перезапусти приложение.'),{once:true});
       audioCtx = new AudioContext();
-      const src = audioCtx.createMediaStreamSource(stream);
+      const src = captureSource=audioCtx.createMediaStreamSource(stream);
       const capture = (data) => {
+        if(!captureReady)return;
         const now = performance.now();
         if (now - lastMeterAt >= 60) {
           lastMeterAt = now;
@@ -286,15 +309,16 @@
         proc = audioCtx.createScriptProcessor(2048, 1, 1);
         proc.onaudioprocess = (e) => capture(new Float32Array(e.inputBuffer.getChannelData(0)));
       }
-      src.connect(proc);
+      if(!captureStream||!stream.getAudioTracks().some(t=>t.readyState==='live'))throw Error('Микрофон недоступен');
+      captureNode=proc;src.connect(proc);
       proc.connect(audioCtx.destination);
+      captureReady=true;
       setStatus('🎤 Голосовой каст готов');
       setTimeout(() => setStatus(''), 3000);
       voiceStatus(true, 'модель и микрофон готовы. ' + micNote + '; ' + captureMode + '; ' + audioCtx.sampleRate + ' Hz');
       if (wantListening) startListening();
     } catch (e) {
-      setStatus('🎤 Голос не работает: ' + (e.message || e), true);
-      voiceStatus(false, 'ошибка: ' + (e.message || e));
+      stopCapture('Голос не работает: '+(e.message||e));
     }
   }
 
@@ -309,6 +333,7 @@
   // по месту в списке: модель по ходу речи пересматривает текст, и фразы могут сдвигаться.
   // Новые уходят одним запросом, чтобы сервер получил их строго по порядку.
   function submit(list) {
+    if(!captureReady)return;
     const batch = [], seen = {};
     for (const p of list) {
       seen[p] = (seen[p] || 0) + 1;
@@ -382,7 +407,7 @@
   }
 
   function startListening() {
-    if (!model || !audioCtx || listening) return;
+    if (!model || !audioCtx || !captureReady || listening) return;
     // Быстрое повторное нажатие: предыдущее высказывание закрываем сразу
     if (flushTimer) endUtterance();
     resetUtterance();
@@ -412,9 +437,10 @@
   let wantListening = false, testMode = false;
   function render({ state: s, event, spell, reason, aim }) {
     testMode = !!s.testOnly;
-    wantListening = s.enabled && (s.listening || s.testOnly);
+    wantListening = s.enabled && s.voiceReady && (s.listening || s.testOnly);
     if (VOICE) {
-      if (wantListening) startListening();
+      if (!s.enabled||!s.voiceReady)abortRecognition();
+      else if (wantListening) startListening();
       else stopListening();
     }
     // При постоянном прослушивании индикатор не показываем, чтобы не висел весь матч

@@ -76,6 +76,7 @@ async function ready(previous=0) {
   assert.equal(saved.status,200);
   assert.equal(fs.readFileSync(config,'utf8'),legacy,'Migrating preferences must not overwrite legacy config');
   assert.equal(JSON.parse(fs.readFileSync(migratedConfig,'utf8')).testOnly,true);
+  const pending=await (await fetch(base+'/config')).json();assert.deepEqual(pending.itemCastModes,{item_force_staff:'click'});
   const r=await fetch(base+'/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   assert.equal(r.status,204);
   const second=await ready(first);
