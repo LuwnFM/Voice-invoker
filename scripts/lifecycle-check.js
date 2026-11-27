@@ -60,7 +60,13 @@ async function ready(previous=0) {
   // Disabled aliases must disappear from the live grammar after restart.
   const preferences=await (await fetch(base+'/config')).json();
   const disabled={...preferences.disabledPhrases,invoker_emp:preferences.phraseCatalog.invoker_emp};
-  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,customSpellPhrases:{invoker_tornado:['ураган','буря']},itemPhrases:{item_slot_item1:['прыжок','эмп'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
+  const {readModelWords}=require('../model-words');
+  const dictionary=readModelWords(path.join(root,'model',require('../model-manifest.json').filename));
+  const used=new Set(Object.values(preferences.phraseCatalog).flat().flatMap(p=>String(p).split(' ')).concat(['ураган','буря','прыжок','щит','телепорт','запиши','записать','фолиант','готовь','готовить','подготовить','подготовь']));
+  const candidates=[...dictionary].filter(w=>/^[а-яё]{5,}$/u.test(w)&&!used.has(w));
+  const aliases=Object.fromEntries(Object.keys(preferences.phraseCatalog).map(id=>[id,id==='invoker_tornado'?['ураган','буря']:[candidates.shift()]]));
+  assert.equal(Object.keys(aliases).length,11);assert.ok(Object.values(aliases).flat().every(w=>typeof w==='string'&&dictionary.has(w)));
+  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,customSpellPhrases:aliases,itemPhrases:{item_slot_item1:['прыжок','эмп'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
   assert.equal(saved.status,200);
   const r=await fetch(base+'/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   assert.equal(r.status,204);
@@ -73,15 +79,20 @@ async function ready(previous=0) {
   assert.ok(grammar.includes('эмп'),'Disabled EMP alias reused for item');
   for(const p of ['прыжок','щит','телепорт','ураган','буря'])assert.ok(grammar.includes(p),'Missing custom phrase '+p);
   assert.ok(preferences.phraseCatalog.invoker_tornado.every(p=>grammar.includes(p)),'Built-in Tornado aliases lost');
-  const updated=await (await fetch(base+'/config')).json();assert.deepEqual(updated.customSpellPhrases.invoker_tornado,['ураган','буря']);
+  const updated=await (await fetch(base+'/config')).json();
+  for(const [id,phrases] of Object.entries(aliases)){assert.deepEqual(updated.customSpellPhrases[id],phrases);assert.ok(phrases.every(p=>grammar.includes(p)),'Custom phrase missing: '+id);}
+  console.log('All 11 abilities accept custom phrases from verified V2 and reload after restart');
   const duplicateAlias=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customSpellPhrases:{invoker_tornado:['прыжок']}})});
   assert.equal(duplicateAlias.status,500,'Spell/item duplicate accepted');
   const conflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:{...disabled,invoker_emp:[]}})});
   assert.equal(conflict.status,500,'Re-enabling conflicting alias must be rejected');
   const diag=await (await fetch(base+'/diagnostics')).json();assert.equal(diag.testOnly,true);
+  const preview=await fetch(base+'/preview-sun-strike',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(preview.status,204);
+  const afterPreview=await (await fetch(base+'/diagnostics')).json();assert.deepEqual(afterPreview.lastTest,diag.lastTest,'Preview must not dispatch voice commands');
   const rejected=await fetch(base+'/voice',{method:'POST',body:JSON.stringify({texts:['торнадо']})});assert.equal(rejected.status,415);
   const foreign=await fetch(base+'/voice',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://example.invalid'},body:JSON.stringify({texts:['торнадо']})});assert.equal(foreign.status,403);
-  const invalid=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:'null'});assert.equal(invalid.status,500);
+  const invalid=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:'null'});assert.equal(invalid.status,400);
+  const oversized=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({padding:'x'.repeat(256*1024)})});assert.equal(oversized.status,413);
   const keysConflict=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:{item1:'Q'}})});assert.equal(keysConflict.status,500);
   const testResult=await fetch(base+'/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texts:['торнадо']})});assert.equal(testResult.status,204);
   const checked=await (await fetch(base+'/diagnostics')).json();assert.deepEqual(checked.lastTest.matched,['торнадо']);

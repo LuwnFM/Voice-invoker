@@ -426,7 +426,7 @@
       if (micShown) keyClick({ vol: 0.12, tone: 1.2 }); // тихий высокий щелчок — микрофон открыт
     }
 
-    if (event === 'cast' && spell) {
+    if ((event === 'cast' || event === 'preview') && spell) {
       /** @type {HTMLImageElement} */ ($('castIcon')).src = ICON(spell.base || spell.id);
       $('castName').textContent = spell.name;
       const el = $('cast');

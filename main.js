@@ -196,9 +196,15 @@ const toHook = (msg, wParam, lParam = 0) => (!shutdown || msg === WM_APP_QUIT) &
 // ---------- Состояние игры из Dota GSI ----------
 let gsi = null; // { at, hero, abilities: { name: {cooldown, can_cast, level} }, slots: [name, name] }
 let gsiWarned = false;
+let gsiRejectedAt = null;
+let importedBindings = null;
 
 function handleGsi(data) {
-  if (config.authToken && data?.auth?.token !== config.authToken) return;
+  if (config.authToken && data?.auth?.token !== config.authToken) {
+    gsiRejectedAt = Date.now();
+    return;
+  }
+  gsiRejectedAt = null;
   const abilities = {};
   const slots = [];
   // Порядок ability0..N совпадает с порядком на панели: два слота способностей идут
@@ -587,10 +593,11 @@ async function repairGsi(){
   finally{repairingGsi=false;}
 }
 async function diagnostics() {
-  let installed = false, cfgMatches = false, itemsConfigured = false, dotaFound = false;
+  let installed = false, cfgMatches = false, itemsConfigured = false, dotaFound = false, gsiPath = '';
   const process = await processStatus();
   try {
     const record = JSON.parse(fs.readFileSync(path.join(__dirname,'.dota-install.json'),'utf8').replace(/^\uFEFF/,''));
+    gsiPath = typeof record.target === 'string' ? record.target : '';
     installed = fs.existsSync(record.target);
     const game=path.resolve(path.dirname(record.target),'..','..','..');
     dotaFound=fs.existsSync(path.join(game,'bin','win64','dota2.exe'));
@@ -600,7 +607,8 @@ async function diagnostics() {
       itemsConfigured=/"items"\s*"1"/.test(raw);
     }
   } catch {}
-  return {version:require('./package.json').version, dotaFound, ...process, itemsConfigured, gsiInstalled:installed, gsiConfigMatches:cfgMatches, gsiAgeMs:gsi?Date.now()-gsi.at:null, hero:gsi?.hero||null, modelVerified:modelInfo.active, experimentalActive:!!experimental, voiceReady:voiceInfo.ready, hookReady:!!hookThreadId, enabled:!!last?.state.enabled, profile:last?.state.timingProfile||config.timingProfile, port:config.port, serverReady, testOnly, lastTest, activePhrases:Object.keys(phraseToSpell).length};
+  const bindingMatches=importedBindings ? Object.entries(importedBindings.keys).every(([key,value])=>(key==='voice'?config.voiceChatKey:config.keys[key])===value) && Object.entries(importedBindings.slotCastModes).every(([key,value])=>(config.slotCastModes?.[key]||(ITEM_KEYS.includes(key)?'quickcast':config.castMode))===value) : null;
+  return {version:require('./package.json').version, dotaFound, ...process, bindingMatches, gsiRejected: gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000, local:{gsiPath,voiceMessage:voiceInfo.message,keys:config.keys,voiceChatKey:config.voiceChatKey}, itemsConfigured, gsiInstalled:installed, gsiConfigMatches:cfgMatches, gsiAgeMs:gsi?Date.now()-gsi.at:null, hero:gsi?.hero||null, modelVerified:modelInfo.active, experimentalActive:!!experimental, voiceReady:voiceInfo.ready, hookReady:!!hookThreadId, enabled:!!last?.state.enabled, profile:last?.state.timingProfile||config.timingProfile, port:config.port, serverReady, testOnly, lastTest, activePhrases:Object.keys(phraseToSpell).length};
 }
 let settingsWin = null;
 function openSettings() {
@@ -664,7 +672,13 @@ async function handleRequest(req,res){
   }
   if (p === '/import-bindings' && req.method === 'POST') {
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
-    try {return res.end(JSON.stringify({ok:true,...importBindings()}));} catch(e){return res.end(JSON.stringify({ok:false,error:String(e.message).slice(0,180)}));}
+    try {importedBindings=importBindings();return res.end(JSON.stringify({ok:true,...importedBindings}));} catch(e){return res.end(JSON.stringify({ok:false,error:String(e.message).slice(0,180)}));}
+  }
+  // Visual-only overlay preview: never enters the voice parser, queue or native hook.
+  if (p === '/preview-sun-strike' && req.method === 'POST') {
+    if (!last || !hookThreadId || shutdown) {res.writeHead(409);return res.end();}
+    broadcast({...last,event:'preview',spell:SPELLS.find(s=>s.id==='invoker_sun_strike'),aim:{x:0.5,y:0.5}});
+    return done();
   }
   if (p === '/diagnostics' && req.method === 'GET') {
     res.writeHead(200, {'Content-Type':'application/json','Cache-Control':'no-store'});

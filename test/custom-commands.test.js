@@ -35,3 +35,14 @@ test('reject unknown words, preparation cues and active spell/item conflicts',()
  const fallback=resolveCommands(base,extra,{customSpellPhrases:{invoker_tornado:['ураган']}},new Set(),false,{strict:false});
  assert.deepEqual(fallback.active.invoker_tornado,['торнадо']);assert.ok(fallback.errors.length);
 });
+
+test('deleting a custom alias removes it from the active grammar without removing built-ins',()=>{
+ const pref={customSpellPhrases:{invoker_tornado:['ураган','буря']},disabledPhrases:{invoker_tornado:['буря']}};
+ const first=resolveCommands(base,extra,pref,words,true);
+ assert.deepEqual(first.active.invoker_tornado,['торнадо','ураган']);
+ const removed=resolveCommands(base,extra,{...pref,customSpellPhrases:{invoker_tornado:['буря']}},words,true);
+ assert.deepEqual(removed.active.invoker_tornado,['торнадо']);
+ assert.deepEqual(removed.customSpellPhrases.invoker_tornado,['буря']);
+ const restored=resolveCommands(base,extra,{customSpellPhrases:{invoker_tornado:['буря']}},words,true);
+ assert.deepEqual(restored.active.invoker_tornado,['торнадо','буря']);
+});
