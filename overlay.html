@@ -439,6 +439,7 @@
     testMode = !!s.testOnly;
     wantListening = s.enabled && s.voiceReady && (s.listening || s.testOnly);
     if (VOICE) {
+      if(event==='bindings-reset'||event==='bindings')abortRecognition();
       if (!s.enabled||!s.voiceReady)abortRecognition();
       else if (wantListening) startListening();
       else stopListening();

@@ -28,13 +28,14 @@ const { readModelWords } = require('./model-words');
 const { resolveCommands } = require('./custom-commands');
 const { importBindings } = require('./dota-bindings');
 const { processStatus, supportReport, bindingSignature } = require('./diagnostics');
+const {bindingUpdate,watchBindingFile,BUFFER_SIZE,writeBindingUpdate}=require('./binding-sync');
 const { allowedHost, allowedOrigin, jsonContentType, readJson } = require('./local-http');
 const { validateKeys } = require('./key-validation');
 const { saveJsonAtomic } = require('./config-storage');
 const { ACTION, vkOf } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
-const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT, WM_APP_TOGGLE } = require('./messages');
+const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT, WM_APP_TOGGLE, WM_APP_BINDINGS } = require('./messages');
 
 /** @type {{port:number,authToken:string,keys:Record<string,string>,voiceChatKey:string,blockKeys:string[],listen:string,castMode:string,timingProfile:string,keyDelayMs:number,castDelayMs:number,slotWaitMs:number,clickDelayMs:number,altDelayMs:number,chainGapMs:number,microphone:string,windowTitle:string,phrases:Record<string,string[]>,acceptInjected:boolean,debugSteps:boolean,experimentalFrames?:boolean,testOnly?:boolean,disabledPhrases?:Record<string,string[]>,customSpellPhrases?:Record<string,string[]>,itemPhrases?:Record<string,string[]>,expandedVocabulary?:boolean,slotCastModes?:Record<string,string>,itemCastModes?:Record<string,string>}} */
 const config = {
@@ -232,7 +233,7 @@ function handleGsi(data) {
     abilities[a.name] = a;
     if ((a.name.startsWith('invoker_empty') || SPELLS.some((s) => s.id === a.name)) && slots.length<2) slots.push(a.name);
   }
-  if (!gsi) log('Данные от Dota получены (GSI работает)');
+  if (!gsi || Date.now()-gsi.at>30000) {log('Данные от Dota получены (GSI работает)');void watchBindings(true);}
   gsi = {
     at: Date.now(),
     hero: data.hero?.name || null,
@@ -551,6 +552,7 @@ function settingsData() {
     experimentalFrames: userConfig.experimentalFrames === true,
     testOnly: userConfig.testOnly === true,
     slotCastModes: userConfig.slotCastModes || {},
+    autoSyncBindings:userConfig.autoSyncBindings!==false,syncQuickcast:userConfig.syncQuickcast!==false,bindingNotifications:userConfig.bindingNotifications!==false,bindingGeneration,
     itemCastModes: userConfig.itemCastModes || {},
   };
 }
@@ -558,7 +560,10 @@ function settingsData() {
 // Берём из присланного только известные поля с допустимыми значениями и дописываем их
 // в config.json, не трогая остальное (свои фразы, паузы и т.д.)
 function saveSettings(body) {
+  if(bindingInFlight)throw Error('Подожди завершения синхронизации клавиш.');
+  if(body.bindingGeneration!==undefined&&body.bindingGeneration!==bindingGeneration)throw Error('Клавиши изменились. Считай их заново перед сохранением.');
   const out = { ...userConfig };
+  for(const k of ['autoSyncBindings','syncQuickcast','bindingNotifications'])if(typeof body[k]==='boolean')out[k]=body[k];
   const keys = {};
   for (const n of KEY_NAMES) if (okKey(body.keys?.[n])) keys[n] = body.keys[n].toUpperCase();
   for (const n of ITEM_KEYS) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
@@ -584,11 +589,14 @@ function saveSettings(body) {
   saveJsonAtomic(CONFIG_FILE, out);
   userConfig = out;
   configInvalid=false;
+  if(out.autoSyncBindings===false){bindingPending=null;clearTimeout(bindingRetry);}
   log('Настройки сохранены в config.json');
 }
 
 let repairingGsi=false, repairFailed=false, hookFailed=false, hookError='', lastCastStatus=null;
-let bindingTimer=null, lastBindingSignature=null, bindingsChanged=false, checkingBindings=false;
+let bindingWatcher=null, watchedBindingFile=null, lastBindingSignature=null, bindingsChanged=false, checkingBindings=false;
+let bindingPending=null,bindingInFlight=null,bindingRetry=null,bindingAckTimer=null,bindingGeneration=0,bindingNotice='',latestBindings=null;
+const bindingBuffer=new SharedArrayBuffer(BUFFER_SIZE);
 async function repairGsi(pick=false){
   if(repairingGsi)return {ok:false,error:'Восстановление уже выполняется'};
   repairingGsi=true;
@@ -622,21 +630,65 @@ async function repairGsi(pick=false){
   }catch(e){repairFailed=true;log('Ошибка восстановления GSI:',e.message);return {ok:false,error:e.message.includes('INVALID_DOTA_FOLDER')?'В выбранной папке не найдена Dota 2.':e.message.includes('Dota moved')?'Привязка GSI осталась к другой папке. Сначала восстанови предыдущую интеграцию через setup-dota.ps1 -Uninstall.':e.message.includes('changed externally')?'GSI изменён вне приложения. Исходный файл сохранён; проверь журнал.':'Не удалось восстановить GSI. Проверь журнал и разрешения Windows; при блокировке скрипта используй start.bat.'};}
   finally{repairingGsi=false;}
 }
-async function watchBindings(){
+function bindingAlert(message){
+  bindingNotice=message;bindingsChanged=true;updateTray();log(message);
+  if(userConfig.bindingNotifications!==false&&tray&&!tray.isDestroyed())try{tray.displayBalloon({title:'Voice Invoker — клавиши Dota',content:message});}catch{}
+}
+function maybeApplyBindings(){
+  clearTimeout(bindingRetry);bindingRetry=null;
+  if(shutdown||!bindingPending||bindingInFlight)return;
+  if(userConfig.autoSyncBindings===false){bindingPending=null;return;}
+  if(activeCast||awaitingSlot||queue.length||!hookThreadId){bindingRetry=setTimeout(maybeApplyBindings,100);return;}
+  const patch=bindingPending;bindingPending=null;
+  const id=bindingGeneration+1;
+  try{
+    writeBindingUpdate(bindingBuffer,patch);
+    bindingInFlight={id,patch};
+    if(last)broadcast({...last,event:'bindings-reset'});
+    if(!toHook(WM_APP_BINDINGS,id))throw Error('Поток ввода недоступен');
+    bindingAckTimer=setTimeout(()=>fatalError('Синхронизация клавиш',Error('Хук не подтвердил новые клавиши')),4000);
+  }catch(e){bindingInFlight=null;bindingAlert('Синхронизация не выполнена: '+e.message);}
+}
+function applyBindingResult(m){
+  if(!bindingInFlight||m.id!==bindingInFlight.id)return;
+  clearTimeout(bindingAckTimer);
+  const {patch}=bindingInFlight;bindingInFlight=null;
+  if(!m.ok){bindingAlert('Синхронизация не выполнена: '+m.reason);maybeApplyBindings();return;}
+  Object.assign(config,patch);bindingGeneration=m.id;
+  try{
+    const out={...userConfig,...patch};saveJsonAtomic(CONFIG_FILE,out);userConfig=out;
+    bindingsChanged=false;bindingNotice='Клавиши Dota синхронизированы без перезапуска.';log(bindingNotice);
+  }catch(e){bindingAlert('Клавиши применены, но не сохранены: '+e.message);}
+  updateTray();maybeApplyBindings();
+}
+function onBindingRead(bindings){
+  if(shutdown)return;
+  latestBindings=bindings;
+  const signature=bindingSignature(bindings);
+  if(!signature||signature===lastBindingSignature)return;
+  const first=lastBindingSignature===null;lastBindingSignature=signature;
+  if(userConfig.autoSyncBindings===false){if(!first)bindingAlert('Бинды изменились. Автосинхронизация выключена.');return;}
+  try{
+    if(configInvalid)throw Error('Сначала восстанови повреждённые настройки.');
+    const differs=(a,b)=>Object.keys({...a,...b}).some(k=>a?.[k]!==b?.[k]);
+    if((userConfig.keys&&differs({...config.keys,...userConfig.keys},config.keys))||(userConfig.voiceChatKey&&userConfig.voiceChatKey!==config.voiceChatKey)||(userConfig.slotCastModes&&differs(userConfig.slotCastModes,config.slotCastModes||{})))throw Error('Есть сохранённые настройки, ожидающие перезапуска.');
+    const patch=bindingUpdate(bindings,config,userConfig.syncQuickcast!==false);
+    if(!bindingInFlight&&!differs(patch.keys,config.keys)&&patch.voiceChatKey===config.voiceChatKey&&!differs(patch.slotCastModes,config.slotCastModes||{})){bindingPending=null;bindingsChanged=false;return;}
+    bindingPending=patch;bindingsChanged=true;bindingNotice='Ожидается завершение текущего каста.';maybeApplyBindings();
+  }catch(e){bindingPending=null;bindingAlert('Бинды не изменены: '+e.message);}
+}
+async function watchBindings(force=false){
   if(shutdown||checkingBindings)return;
   checkingBindings=true;
   try{
-    const proc=await processStatus();
-    const signature=bindingSignature(proc.bindings);
-    if(!signature||shutdown)return;
-    if(lastBindingSignature!==null&&signature!==lastBindingSignature){
-      bindingsChanged=true;
-      updateTray();
-      log('Изменились бинды Dota. Импортируй и сохрани настройки вручную; автоперезапуск отключён.');
-      if(tray&&!tray.isDestroyed())try{tray.displayBalloon({title:'Voice Invoker — клавиши Dota изменились',content:'Проверь настройки. Автоматический перезапуск не выполняется.'});}catch{}
-    }
-    lastBindingSignature=signature;
-  }catch(e){log('Проверка изменения биндов:',e.message);}
+    const proc=await processStatus(force);
+    if(shutdown)return;
+    const file=proc.bindingFile||null;
+    if(file===watchedBindingFile&&bindingWatcher)return;
+    bindingWatcher?.close();bindingWatcher=null;watchedBindingFile=file;lastBindingSignature=null;latestBindings=null;bindingPending=null;
+    if(!file)return;
+    bindingWatcher=watchBindingFile(file,onBindingRead,e=>{latestBindings=null;bindingAlert('Не удалось прочитать бинды Dota: '+e.message);});
+  }catch(e){bindingAlert('Наблюдение за биндами недоступно: '+e.message);}
   finally{checkingBindings=false;}
 }
 async function diagnostics() {
@@ -654,13 +706,13 @@ async function diagnostics() {
     installed=!!gsiPath&&fs.existsSync(gsiPath);
     if(installed){const raw=fs.readFileSync(gsiPath,'utf8');cfgMatches=raw.includes('http://127.0.0.1:'+config.port+'/gsi')&&raw.includes('"'+config.authToken+'"');itemsConfigured=/"items"\s*"1"/.test(raw);}
   }catch{}
-  const binds=proc.bindings;
+  const binds=proc.bindingFile===watchedBindingFile&&latestBindings?latestBindings:proc.bindings;
   const required=['quas','wex','exort','invoke','slot1','slot2','voice'];
   const bindingMatches=binds ? required.every(k=>!!binds.keys[k]) && Object.entries(binds.keys).every(([key,value])=>(key==='voice'?config.voiceChatKey:config.keys[key])===value) && Object.entries(binds.slotCastModes).every(([key,value])=>(config.slotCastModes?.[key]||(ITEM_KEYS.includes(key)?'quickcast':config.castMode))===value) : null;
   const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
   const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
   const abilities=gsi?Object.fromEntries(Object.values(gsi.abilities).filter(a=>gameName(a.name)).map(a=>[a.name,{level:Number.isFinite(a.level)?a.level:null,cooldown:Number.isFinite(a.cooldown)?a.cooldown:null,canCast:a.can_cast===true}])):null;
-  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingsChanged:bindingsChanged&&bindingMatches!==true,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
+  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingGeneration,bindingNotice,bindingsChanged,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,slotCastModes:config.slotCastModes||{},bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
 }
 let settingsWin = null;
 function openStartupDiagnostics(){
@@ -669,6 +721,7 @@ function openStartupDiagnostics(){
   if(!settingsWin||settingsWin.isDestroyed()||!settingsWin.isVisible())openSettings(false);
 }
 function openSettings(focus=true) {
+  void watchBindings(true);
   if (shutdown || !serverReady) return;
   if (settingsWin && !settingsWin.isDestroyed()) {
     if (settingsWin.isMinimized()) settingsWin.restore();
@@ -731,7 +784,7 @@ async function handleRequest(req,res){
   }
   if (p === '/import-bindings' && req.method === 'POST') {
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});
-    try {return res.end(JSON.stringify({ok:true,...importBindings()}));} catch(e){return res.end(JSON.stringify({ok:false,error:String(e.message).slice(0,180)}));}
+    try {return res.end(JSON.stringify({ok:true,...importBindings(),bindingGeneration}));} catch(e){return res.end(JSON.stringify({ok:false,error:String(e.message).slice(0,180)}));}
   }
   // Visual-only overlay preview: never enters the voice parser, queue or native hook.
   if (p === '/preview-sun-strike' && req.method === 'POST') {
@@ -739,6 +792,7 @@ async function handleRequest(req,res){
     broadcast({...last,event:'preview',spell:SPELLS.find(s=>s.id==='invoker_sun_strike'),aim:{x:0.5,y:0.5}});
     return done();
   }
+  if(p==='/copy-launch-flag'&&req.method==='POST'){clipboard.writeText('-gamestateintegration');return done();}
   if (p === '/copy-report' && req.method === 'POST') {
     clipboard.writeText(supportReport(await diagnostics()));return done();
   }
@@ -789,7 +843,7 @@ async function handleRequest(req,res){
       lastTest = {...lastTest,matched:(Array.isArray(texts)?texts:[text]).map(t=>String(t||'').slice(0,200)).slice(0,20), at:Date.now()};
       return done();
     }
-    if(!voiceReady)return done();
+    if(!voiceReady||bindingPending||bindingInFlight)return done();
     for (const t of (Array.isArray(texts) ? texts : [text]).slice(0,32)) if(typeof t==='string'&&t.length<=200)castByPhrase(t.trim().toLowerCase());
     return done();
   }
@@ -819,7 +873,7 @@ setInterval(() => clients.forEach((res) => res.write(': ping\n\n')), 15000);
 // ---------- Хук клавиатуры ----------
 function startWorker() {
   if (shutdown) return;
-  const worker = hookWorker = new Worker(path.join(__dirname, 'hook-worker.js'), { workerData: { config: testOnly ? {...config,blockKeys:[]} : config } });
+  const worker = hookWorker = new Worker(path.join(__dirname, 'hook-worker.js'), { workerData: { config: testOnly ? {...config,blockKeys:[]} : config, bindingBuffer } });
   worker.on('message', (m) => {
     if (m.type === 'quit-request') return requestShutdown(false);
     if (m.type === 'stopped') {
@@ -827,6 +881,7 @@ function startWorker() {
       return;
     }
     if (m.type === 'log') return log(m.text);
+    if (m.type === 'bindings-applied') return applyBindingResult(m);
     if (m.type === 'cast-complete') return handleCastComplete(m);
     if (m.type === 'step' && config.debugSteps) return log('Шаг:', m.edge, m.step, Math.round(m.elapsedMs) + ' мс');
     if (m.type === 'settings') return openSettings();
@@ -887,7 +942,7 @@ function finishShutdown() {
   if (!shutdown || hookWorker || exiting) return;
   exiting = true;
   clearInterval(shutdown.retry);
-  clearInterval(bindingTimer);
+  bindingWatcher?.close();clearTimeout(bindingRetry);clearTimeout(bindingAckTimer);
   clearTimeout(startupDiagnosticTimer);
   for (const client of clients) client.end();
   clients.clear();
@@ -1030,7 +1085,7 @@ app.whenReady().then(async () => {
       : `Слушаю, пока зажата клавиша голосового чата ${String(config.voiceChatKey).toUpperCase()}`);
     log('Ctrl+Shift+F7 — вкл/выкл, Ctrl+Shift+F8 — выход, Ctrl+Shift+F9 — настройки клавиш, Ctrl+Shift+F10 — обычный режим, Ctrl+Shift+F11 — ускоренный, Ctrl+Shift+F12 — турбо');
     startWorker();
-    void watchBindings();bindingTimer=setInterval(watchBindings,10000);
+    void watchBindings();
     createWindow();
     createTray();
     if (firstRun || settingsRequested) { settingsRequested = false; openSettings(); }

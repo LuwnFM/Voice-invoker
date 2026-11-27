@@ -43,17 +43,18 @@ function inspectSteam(steam,active){
   const id=chooseAccount(steam,active);
   if(!id)return {savedLaunchFlag:null,bindings:null,bindingsIssue:'account-unknown'};
   const root=path.join(steam,'userdata',id);
+  const bindingFile=path.join(root,'570','remote','cfg','dotakeys_personal.lst');
   let savedLaunchFlag=null;
   try{savedLaunchFlag=savedLaunchOptions(fs.readFileSync(path.join(root,'config','localconfig.vdf'),'utf8'));}catch{}
   try{
-   const bindings=readBindings(fs.readFileSync(path.join(root,'570','remote','cfg','dotakeys_personal.lst'),'utf8'));
-   return {savedLaunchFlag,bindings,bindingsIssue:null};
-  }catch{return {savedLaunchFlag,bindings:null,bindingsIssue:'bindings-unreadable'};}
+   const bindings=readBindings(fs.readFileSync(bindingFile,'utf8'));
+   return {savedLaunchFlag,bindings,bindingsIssue:null,bindingFile};
+  }catch{return {savedLaunchFlag,bindings:null,bindingsIssue:'bindings-unreadable',bindingFile};}
  }catch{return {savedLaunchFlag:null,bindings:null,bindingsIssue:'account-unknown'};}
 }
 let state={running:null,launchFlag:null,steamRunning:null,steamPath:null,dotaPath:null,savedLaunchFlag:null,bindings:null,bindingsIssue:null},at=0,pending=null;
-function processStatus(){
- if(Date.now()-at<5000)return Promise.resolve(state);
+function processStatus(force=false){
+ if(!force&&Date.now()-at<30000)return Promise.resolve(state);
  if(pending)return pending;
  pending=new Promise(resolve=>{
    const script="$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $p=Get-CimInstance Win32_Process -Filter \"Name='dota2.exe'\" | Select-Object -First 1; $s=Get-Process steam -ErrorAction SilentlyContinue; $root=(Get-ItemProperty 'HKCU:\\Software\\Valve\\Steam' -ErrorAction SilentlyContinue).SteamPath; if(-not $root){$root=(Get-ItemProperty 'HKLM:\\SOFTWARE\\WOW6432Node\\Valve\\Steam' -ErrorAction SilentlyContinue).InstallPath}; if(-not $root){$root=Join-Path ${env:ProgramFiles(x86)} 'Steam'}; $active=(Get-ItemProperty 'HKCU:\\Software\\Valve\\Steam\\ActiveProcess' -ErrorAction SilentlyContinue).ActiveUser; [pscustomobject]@{running=[bool]$p;commandLine=$p.CommandLine;exe=$p.ExecutablePath;steamRunning=[bool]$s;steamPath=$root;active=$active}|ConvertTo-Json -Compress";

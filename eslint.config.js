@@ -1,7 +1,7 @@
 // ESLint flat config. Correctness rules are errors; unused declarations are
 // warnings until the historical UI/native bridge is cleaned up.
 const globalsOf=names=>Object.fromEntries(names.split(/\s+/).filter(Boolean).map(n=>[n,'readonly']));
-const node=globalsOf('require module exports __dirname __filename process Buffer console global globalThis setTimeout clearTimeout setInterval clearInterval setImmediate clearImmediate fetch URL URLSearchParams AbortSignal Response TextDecoder TextEncoder');
+const node=globalsOf('require module exports __dirname __filename process Buffer console global globalThis setTimeout clearTimeout setInterval clearInterval setImmediate clearImmediate fetch URL URLSearchParams AbortSignal Response TextDecoder TextEncoder SharedArrayBuffer Atomics Uint8Array Int32Array');
 const browser=globalsOf('window document navigator location performance console setTimeout clearTimeout setInterval clearInterval requestAnimationFrame cancelAnimationFrame fetch URL URLSearchParams AudioContext AudioWorkletNode AudioWorkletProcessor registerProcessor EventSource Option Vosk createPhraseParser createRecognitionGate recognitionGrammar globalThis');
 module.exports=[
  {ignores:['node_modules/**','build-output/**','model/**','.quality-tools/**']},

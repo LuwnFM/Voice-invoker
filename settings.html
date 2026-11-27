@@ -100,8 +100,11 @@
 <div class="actions diag-actions"><button id="copyReport">Скопировать отчёт</button><button id="openLogs">Папка с логом</button><button id="refreshReport">Обновить</button><button id="repairGsi">Проверить / восстановить GSI</button><button id="pickDota">Указать папку Dota</button><button id="previewSun">Показать анимацию Sun Strike</button></div>
 <p class="hint">Если что-то не работает, скопируй отчёт. В нём есть версия, состояние GSI, слотов, модели и хука. Локальные пути, имя микрофона, Steam ID, токен GSI, пользовательские фразы и сырые логи не копируются. Журнал можно открыть отдельно.</p>
 <h2>Клавиши в Dota</h2>
-<p class="hint">Должны совпадать с твоими настройками в игре. Изменения отслеживаются автоматически каждые 10 секунд; настройки не меняются и приложение не перезапускается без твоего действия.</p>
-<div class="actions"><button id="importBinds">Считать клавиши Dota</button></div>
+<p class="hint">Должны совпадать с твоими настройками в игре. Изменения отслеживаются по уведомлениям файловой системы. Steam не редактируется; при корректных биндах перезапуск не нужен.</p>
+<div class="actions"><button id="importBinds">Считать клавиши Dota</button><button id="copyLaunchFlag">Скопировать параметр запуска Steam</button></div>
+<label><input type="checkbox" id="autoSyncBindings" checked> Автоматическая синхронизация клавиш</label>
+<label><input type="checkbox" id="syncQuickcast" checked> Синхронизация Quickcast</label>
+<label><input type="checkbox" id="bindingNotifications" checked> Уведомления об изменениях</label>
 <div class="panel" id="dota"></div>
 
 
@@ -185,6 +188,7 @@
   }
 
   const state = { keys: {}, voice: '' };
+  let loadedBindingGeneration=null,loadedBindingSnapshot='';
   let waiting = null; // { id, btn }
   const $ = (s) => document.querySelector(s);
   const status = (text, cls = '') => { $('#status').textContent = text; $('#status').className = cls; };
@@ -374,6 +378,10 @@
     try{
       const r=await fetch('/diagnostics',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);report=await r.json();
       const d=report,host=$('#diagnostics');
+      if(loadedBindingGeneration!==null&&d.bindingGeneration!==loadedBindingGeneration&&!d.bindingsChanged){
+        if(bindingSnapshot()===loadedBindingSnapshot&&!waiting){const b=d.local||{};state.keys={...b.keys};state.voice=b.voiceChatKey;applyModeControls(b.slotCastModes||{});render();loadedBindingSnapshot=bindingSnapshot();loadedBindingGeneration=d.bindingGeneration;}
+        else status('Клавиши изменились. Считай их заново перед сохранением.','bad');
+      }
       const list=$('#knownItems');const names=[...new Set((d.items||[]).filter(n=>typeof n==='string'&&/^item_[a-z0-9_]+$/.test(n)&&n!=='item_empty'))];list.replaceChildren(...names.map(name=>{const option=document.createElement('option');option.value=name;return option;}));
       const local=d.local||{}, keys=local.keys||{};
       /** @type {{title:string,detail:string,status:string,action?:string,target?:string}[]} */
@@ -384,7 +392,7 @@
       rows.push({title:'Параметр запуска -gamestateintegration',detail:(d.launchFlag===true?'Параметр присутствует в запущенной Dota.':d.running===false?'Запусти Dota через Start Voice Invoker.bat.':d.launchFlag===false?'Перезапусти Dota через Start Voice Invoker.bat.':'Не удалось проверить параметры процесса.')+' В сохранённых параметрах Steam: '+(d.savedLaunchFlag===true?'есть':d.savedLaunchFlag===false?'нет':'не проверено')+'.',status:d.launchFlag===true?'good':d.launchFlag===false?'bad':'wait'});
       const fresh=d.gsiAgeMs!==null&&d.gsiAgeMs<5000;
       rows.push({title:fresh?(d.hero==='npc_dota_hero_invoker'?'Данные Dota получены — Invoker':d.hero?'Данные идут, но герой не Invoker':'Данные идут, герой не выбран'):d.running===false?'Dota не запущена':d.gsiRejected?'GSI: неверный токен':d.gsiAgeMs===null?(d.running===null?'Статус Dota неизвестен, данных нет':'Dota запущена, но данных нет'):'GSI: данные устарели',detail:fresh?(d.hero==='npc_dota_hero_invoker'?(d.alive?'Герой жив. Слоты: '+(d.slots||[]).join(', '):'Герой мёртв, каст блокируется.'):d.hero?'Сейчас: '+d.hero.replace('npc_dota_hero_','')+'. Каст блокируется.':'Герой появится в тренировочном режиме или матче.'):d.running===false?'Проверка продолжится после запуска игры.':d.gsiRejected?'Восстанови GSI и перезапусти Dota.':d.running===null?'Статус игры неизвестен. Проверь запуск и GSI.':'Проверь GSI, перезапусти игру после установки файла и войди в тренировочный режим. Без GSI способности используют резервный режим, предметы не применяются.',status:fresh?(d.hero==='npc_dota_hero_invoker'&&d.alive?'good':'wait'):d.running===false||d.running===null||d.gsiAgeMs!==null?'wait':'bad',action:'Обновить',target:'#refreshReport'});
-      rows.push({title:d.bindingMatches===true?'Клавиши и режим каста совпадают с Dota':d.bindingMatches===false?'Клавиши Dota требуют проверки':'Клавиши и режим каста',detail:'Сферы '+[keys.quas,keys.wex,keys.exort].join(' ')+', Invoke '+(keys.invoke||'—')+', способности '+[keys.slot1,keys.slot2].join(' ')+', голос '+(local.voiceChatKey||'—')+'. '+(d.bindingMatches===true?'Совпадение проверено.':d.bindingsChanged?'Бинды изменились с момента запуска. Считай, сохрани и перезапусти вручную.':'Считай бинды, проверь и сохрани настройки.')+(d.bindingsIssue?' Причина: '+({'steam-not-found':'Steam не найден','account-unknown':'не удалось однозначно определить аккаунт','bindings-unreadable':'файл клавиш недоступен','process-unavailable':'проверка процесса недоступна'}[d.bindingsIssue]||'проверка недоступна')+'.':'')+((local.bindingWarnings||[]).length?' '+local.bindingWarnings.join('; '):'')+' Предметы: '+['item1','item2','item3','item4','item5','item6','neutral','teleport'].map(k=>keys[k]||'—').join(' '),status:d.bindingMatches===true&&!d.bindingWarningsCount?'good':'wait',action:'Считать',target:'#importBinds'});
+      rows.push({title:d.bindingMatches===true?'Клавиши и режим каста совпадают с Dota':d.bindingMatches===false?'Клавиши Dota требуют проверки':'Клавиши и режим каста',detail:'Сферы '+[keys.quas,keys.wex,keys.exort].join(' ')+', Invoke '+(keys.invoke||'—')+', способности '+[keys.slot1,keys.slot2].join(' ')+', голос '+(local.voiceChatKey||'—')+'. '+(d.bindingMatches===true?'Совпадение проверено.':d.bindingsChanged?(d.bindingNotice||'Бинды изменились; проверь настройки.'):'Считай бинды, проверь и сохрани настройки.')+(d.bindingsIssue?' Причина: '+({'steam-not-found':'Steam не найден','account-unknown':'не удалось однозначно определить аккаунт','bindings-unreadable':'файл клавиш недоступен','process-unavailable':'проверка процесса недоступна'}[d.bindingsIssue]||'проверка недоступна')+'.':'')+((local.bindingWarnings||[]).length?' '+local.bindingWarnings.join('; '):'')+' Предметы: '+['item1','item2','item3','item4','item5','item6','neutral','teleport'].map(k=>keys[k]||'—').join(' '),status:d.bindingMatches===true&&!d.bindingWarningsCount?'good':'wait',action:'Считать',target:'#importBinds'});
       rows.push({title:d.voiceReady?'Распознавание речи готово':'Распознавание речи не готово',detail:local.voiceMessage||'Ожидание модели и микрофона.',status:d.voiceReady?'good':d.voiceFailed||!d.modelAvailable?'bad':'wait'});
       rows.push({title:d.testOnly?'Тестовый режим без игровых нажатий':d.hookReady&&d.enabled?'Клавиши перехватываются':d.hookReady?'Голосовой каст выключен':'Нативный хук не готов',detail:d.testOnly?'Игровые действия отключены.':d.hookReady?'Ctrl+Shift+F7 — переключить активность.':(d.hookFailed?'Поток хука завершился с ошибкой. ':'Хук ещё не готов. ')+(local.hookError?local.hookError+' ':'')+'Проверь журнал запуска и блокировку антивирусом.',status:d.hookReady?(d.enabled||d.testOnly?'good':'wait'):'bad'});
       rows.push({title:'Модель и версия',detail:d.version+' · '+(d.modelVerified?'V2: SHA-256 OK':'V2 не подтверждена')+' · '+d.activePhrases+' активных фраз · '+d.profile+' · порт '+d.port+(d.experimentalActive?' · экспериментальный режим':''),status:d.modelVerified&&d.serverReady?'good':'wait'});
@@ -422,10 +430,14 @@
     if(!c.dictionaryReady)$('#wordResults').textContent='Словарь не загружен: новые фразы нельзя проверить.';
   }
   $('#wordFind').onclick=async()=>{try{const q=$('#wordSearch').value;const d=await (await fetch('/dictionary?q='+encodeURIComponent(q))).json();$('#wordResults').textContent=d.ready?(d.exact?'Слово есть. ':'')+(d.matches.join(', ')||'Нет совпадений'):'Словарь недоступен';}catch(e){status(e.message,'bad');}};
+  $('#copyLaunchFlag').onclick=async()=>{try{const r=await fetch('/copy-launch-flag',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!r.ok)throw Error('HTTP '+r.status);status('Скопировано. Steam → Dota 2 → Свойства → Параметры запуска: добавь к существующим.','ok');}catch(e){status(e.message,'bad');}};
+  function applyModeControls(modes){for(const [id,mode] of Object.entries(modes)){const el=$('#'+id+'Mode')||document.querySelector('[data-item-mode="'+id+'"]');if(el)el.value=String(mode);}}
+  function bindingSnapshot(){return JSON.stringify([state.keys,state.voice,$('#slot1Mode').value,$('#slot2Mode').value,[.../** @type {NodeListOf<HTMLSelectElement>} */ (document.querySelectorAll('[data-item-mode]'))].map(e=>e.value)]);}
   $('#importBinds').onclick=async()=>{
     try{const d=await (await fetch('/import-bindings',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();if(!d.ok)throw Error(d.error);
       const {voice,...keys}=d.keys;Object.assign(state.keys,keys);if(voice)state.voice=voice;
       for(const [id,mode] of Object.entries(d.slotCastModes)){const el=$('#'+id+'Mode')||document.querySelector('[data-item-mode="'+id+'"]');if(el)el.value=mode;}
+      loadedBindingGeneration=d.bindingGeneration;loadedBindingSnapshot=bindingSnapshot();
       render();status('Импортировано '+Object.keys(d.keys).length+' клавиш. Проверь и сохрани. '+d.warnings.join('; '),d.warnings.length?'bad':'ok');
     }catch(e){status('Импорт: '+e.message,'bad');}
   };
@@ -449,6 +461,7 @@
   function collect() {
     return {
       keys: state.keys,
+      bindingGeneration:loadedBindingGeneration,autoSyncBindings:$('#autoSyncBindings').checked,syncQuickcast:$('#syncQuickcast').checked,bindingNotifications:$('#bindingNotifications').checked,
       disabledPhrases: selectedExclusions(),
       customSpellPhrases: Object.fromEntries(Object.entries(spellNames).map(([suffix])=>{const id='invoker_'+suffix;return [id,[.../** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#phrases input[data-custom="1"][data-spell="'+id+'"]'))].map(b=>b.dataset.phrase)];})),
       experimentalFrames: $('#experimentalFrames').checked,
@@ -470,6 +483,7 @@
     });
     const r = await res.json().catch(() => ({}));
     if (!r.ok) throw new Error(r.error || 'HTTP ' + res.status);
+    loadedBindingSnapshot=bindingSnapshot();
   }
 
   $('#save').onclick = async () => {
@@ -504,7 +518,9 @@
     initMic(c.microphone || '').catch(e=>status('Микрофон: '+e.message,'bad'));
     build();
     render();
-    if(c.firstRun)$('#importBinds').click();
+    $('#autoSyncBindings').checked=c.autoSyncBindings;$('#syncQuickcast').checked=c.syncQuickcast;$('#bindingNotifications').checked=c.bindingNotifications;
+    loadedBindingGeneration=c.bindingGeneration;loadedBindingSnapshot=bindingSnapshot();
+    if(c.firstRun&&!c.autoSyncBindings)$('#importBinds').click();
   }).catch(() => status('Плагин не запущен: открой эту страницу через start.bat', 'bad'));
 </script>
 </body>
