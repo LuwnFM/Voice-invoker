@@ -11,13 +11,21 @@ where npm >nul 2>&1 || goto error
 node scripts\ensure-runtime.js
 if errorlevel 1 goto error
 call setup-run.bat -Launch
-if errorlevel 1 goto error
+if errorlevel 1 (
+  echo Dota/GSI setup failed. Opening diagnostics instead of closing.
+  set "VI_SETUP_FAILED=1"
+  set "VI_REOPEN_SETTINGS=1"
+)
 node scripts\launch.js --background
 if errorlevel 1 goto error
 exit /b 0
 :packaged
 call setup-run.bat -Launch
-if errorlevel 1 goto error
+if errorlevel 1 (
+  echo Dota/GSI setup failed. Opening diagnostics instead of closing.
+  set "VI_SETUP_FAILED=1"
+  set "VI_REOPEN_SETTINGS=1"
+)
 set "VI_PACKAGED=1"
 set "ELECTRON_RUN_AS_NODE=1"
 "%~dp0..\..\VoiceInvoker.exe" scripts\launch.js --background

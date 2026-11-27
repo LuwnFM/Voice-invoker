@@ -2,9 +2,9 @@
 
 Голосовое управление способностями Инвокера в Dota 2 для Windows 10/11 x64. Произноси название способности, русскую реплику героя или привычное сокращение — приложение распознаёт фразу и автоматически собирает и применяет способность либо только подготавливает её для ручного применения, если перед названием произнесён специальный голосовой префикс. Учитываются настройки клавиш и данные игры (GSI).
 
-Текущая версия: **1.1.0-rc.7** (Release Candidate). RC7 добавляет индивидуальный выбор фраз, диагностику, импорт биндов, восемь настраиваемых слотов предметов и опциональный экспериментальный режим Vosk. Фоновая работа RC6 и голосовые возможности RC4 сохранены.
+Подготавливаемая версия: **1.1.1**. Включает исправления RC7, диагностику, пользовательские фразы, отслеживание биндов, режимы предметов, миграцию данных, обновлённые зависимости и проверяемые Windows-сборки. Фоновая работа RC6, голосовые возможности RC4 и модель V2 сохранены. Реальный тест в Dota на Windows 10 требуется перед подтверждением стабильности.
 
-[Скачать релиз](https://github.com/LuwnFM/Voice-invoker/releases/tag/v1.1.0-rc.7) · [Модель на Google Диске](https://drive.google.com/file/d/1inyLlShd7d6Lql1MosCWKGdnPUvmKXZD/view) · [Документация](docs/CONFIGURATION.md)
+[Скачать релиз](https://github.com/LuwnFM/Voice-invoker/releases) · [Модель на Google Диске](https://drive.google.com/file/d/1inyLlShd7d6Lql1MosCWKGdnPUvmKXZD/view) · [Документация](docs/CONFIGURATION.md)
 
 ## Возможности
 
@@ -24,9 +24,9 @@
 
 ## Установка и запуск
 
-**Готовая сборка для Windows x64:** скачай установщик `VoiceInvoker-Setup-1.1.0-rc.7.exe` либо `VoiceInvoker-Portable-1.1.0-rc.7.zip` со страницы релиза после публикации. В них уже есть Electron и V2. Установщик не требует установки Node.js или npm. Для portable распакуй весь архив и запусти `Start Voice Invoker.bat`. Если используешь исходный ZIP, следуй шагам ниже.
+**Готовая сборка для Windows x64:** скачай установщик `VoiceInvoker-Setup-1.1.1.exe` либо `VoiceInvoker-Portable-1.1.1.zip` со страницы релиза после публикации. В них уже есть Electron и V2. Установщик не требует установки Node.js или npm. Для portable распакуй весь архив и запусти `Start Voice Invoker.bat`. Если используешь исходный ZIP, следуй шагам ниже.
 
-1. Скачай [Source code (zip) текущего релиза](https://github.com/LuwnFM/Voice-invoker/archive/refs/tags/v1.1.0-rc.7.zip) и распакуй архив в отдельную папку.
+1. Скачай [Source code (zip) текущего релиза](https://github.com/LuwnFM/Voice-invoker/archive/refs/tags/v1.1.1.zip) и распакуй архив в отдельную папку.
 2. Установи **Node.js 22.12+ x64 (рекомендуется)** или **Node.js 26 x64 (также проверен в CI)**: [22](https://nodejs.org/dist/latest-v22.x/) · [26](https://nodejs.org/dist/latest-v26.x/). Для EXE и portable ZIP отдельный Node.js не нужен. На компьютере должны быть Steam и установленная Dota 2.
 3. Закрой Dota 2 и запусти `start.bat`. Скрипт при необходимости установит npm-зависимости, найдёт игру, установит GSI и запустит Dota с параметрами `-gamestateintegration -windowed -noborder`, затем приложение. Постоянные параметры запуска Steam и личные бинды не переписываются.
 4. При первом запуске модель Invoker V2 скачивается автоматически. Дождись завершения загрузки, проверь настройки клавиш и микрофона. В `log.txt` при успешной проверке модели появится `Invoker V2 (SHA-256 OK)`.
@@ -45,7 +45,7 @@
 - Встроенный набор приложения: **143 фразы** с V2, **96** со штатной моделью. Пользовательские фразы добавляются к встроенным, а не заменяют их.
 - При отсутствии или повреждении архива приложение загружает V2 с Google Диска, проверяя размер и SHA-256 до сохранения. При ошибке скачивания используется штатная русская модель с предупреждением в журнале.
 
-Скачать вручную: [GitHub Releases](https://github.com/LuwnFM/Voice-invoker/releases/download/v1.1.0-rc.7/vosk-model-small-ru-invoker.tar.gz) или [Google Диск](https://drive.google.com/file/d/1inyLlShd7d6Lql1MosCWKGdnPUvmKXZD/view). Положи файл в `model/vosk-model-small-ru-invoker.tar.gz` рядом с программой, не распаковывая tar.gz. Исходный ZIP приложения сам по себе не содержит модель.
+Скачать вручную: [GitHub Releases](https://github.com/LuwnFM/Voice-invoker/releases/download/v1.1.0-rc.6/vosk-model-small-ru-invoker.tar.gz) или [Google Диск](https://drive.google.com/file/d/1inyLlShd7d6Lql1MosCWKGdnPUvmKXZD/view). Положи файл в `model/vosk-model-small-ru-invoker.tar.gz` рядом с программой, не распаковывая tar.gz. Исходный ZIP приложения сам по себе не содержит модель.
 
 SHA-256: `dcba103f27b209415fae50065d420ab59f171bff7da047f60f3801c09de8ba90`.
 

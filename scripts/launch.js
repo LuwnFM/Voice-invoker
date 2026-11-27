@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const root = path.resolve(__dirname, '..');
 const RESTART = 75;
 const {initializeUserData}=require('../user-data');
-function launch(entry = root, reopen = false) {
+function launch(entry = root, reopen = process.env.VI_REOPEN_SETTINGS==='1') {
   /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, VI_SUPERVISED: '1', VI_REOPEN_SETTINGS: reopen ? '1' : '0' };
   delete env.ELECTRON_RUN_AS_NODE;

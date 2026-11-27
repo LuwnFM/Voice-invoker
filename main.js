@@ -12,6 +12,7 @@ let settingsRequested = process.env.VI_REOPEN_SETTINGS === '1' || process.argv.i
 let serverReady = false;
 let tray = null;
 let trayStateKey='', diagnosticsAutoOpened=false, voiceEverReady=false, fatalShown=false;
+let setupFailedAtStartup=process.env.VI_SETUP_FAILED==='1', startupDiagnosticTimer=null;
 app.on('second-instance', () => {
   if (serverReady && !shutdown) openSettings();
   else settingsRequested = true;
@@ -616,7 +617,7 @@ async function repairGsi(pick=false){
       if(!e.message.includes('DOTA_NOT_FOUND'))throw e;
       const folder=await choose();if(!folder)return {ok:false,error:'Папка не выбрана'};await run(folder);
     }
-    repairFailed=false;
+    repairFailed=false;setupFailedAtStartup=false;
     return {ok:true,message:'GSI проверен. Если игра была открыта, перезапусти Dota для загрузки файла.'};
   }catch(e){repairFailed=true;log('Ошибка восстановления GSI:',e.message);return {ok:false,error:e.message.includes('INVALID_DOTA_FOLDER')?'В выбранной папке не найдена Dota 2.':e.message.includes('Dota moved')?'Привязка GSI осталась к другой папке. Сначала восстанови предыдущую интеграцию через setup-dota.ps1 -Uninstall.':e.message.includes('changed externally')?'GSI изменён вне приложения. Исходный файл сохранён; проверь журнал.':'Не удалось восстановить GSI. Проверь журнал и разрешения Windows; при блокировке скрипта используй start.bat.'};}
   finally{repairingGsi=false;}
@@ -659,25 +660,26 @@ async function diagnostics() {
   const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
   const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
   const abilities=gsi?Object.fromEntries(Object.values(gsi.abilities).filter(a=>gameName(a.name)).map(a=>[a.name,{level:Number.isFinite(a.level)?a.level:null,cooldown:Number.isFinite(a.cooldown)?a.cooldown:null,canCast:a.can_cast===true}])):null;
-  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingsChanged:bindingsChanged&&bindingMatches!==true,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,lastCastStatus,effectiveSettings};
+  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingsChanged:bindingsChanged&&bindingMatches!==true,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
 }
 let settingsWin = null;
 function openStartupDiagnostics(){
   if(diagnosticsAutoOpened||shutdown||!serverReady)return;
   diagnosticsAutoOpened=true;
-  if(!settingsWin||settingsWin.isDestroyed()||!settingsWin.isVisible())openSettings();
+  if(!settingsWin||settingsWin.isDestroyed()||!settingsWin.isVisible())openSettings(false);
 }
-function openSettings() {
+function openSettings(focus=true) {
   if (shutdown || !serverReady) return;
   if (settingsWin && !settingsWin.isDestroyed()) {
     if (settingsWin.isMinimized()) settingsWin.restore();
-    settingsWin.show();
-    return settingsWin.focus();
+    if(focus){settingsWin.show();return settingsWin.focus();}
+    settingsWin.showInactive();return;
   }
   settingsWin = new BrowserWindow({
     width: Math.min(680,screen.getPrimaryDisplay().workAreaSize.width), height: Math.min(880,screen.getPrimaryDisplay().workAreaSize.height), minWidth: 480, title: 'Voice Invoke — настройки',
-    backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true, icon: path.join(__dirname,'icon.png'),
+    backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true, show:focus, icon: path.join(__dirname,'icon.png'),
   });
+  if(!focus)settingsWin.once('ready-to-show',()=>settingsWin?.showInactive());
   settingsWin.setMenu(null);
   settingsWin.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   settingsWin.webContents.on('will-navigate',e=>e.preventDefault());
@@ -886,6 +888,7 @@ function finishShutdown() {
   exiting = true;
   clearInterval(shutdown.retry);
   clearInterval(bindingTimer);
+  clearTimeout(startupDiagnosticTimer);
   for (const client of clients) client.end();
   clients.clear();
   serverReady = false;
@@ -920,9 +923,9 @@ function updateTray(){
   if(trayStateKey===key)return;trayStateKey=key;
   tray.setToolTip('Voice Invoker — '+(testOnly?'тест без нажатий':enabled?'каст включён':'каст выключен'));
   tray.setContextMenu(Menu.buildFromTemplate([
-    {label:'Настройки / диагностика',click:openSettings},
+    {label:'Настройки / диагностика',click:()=>openSettings()},
     {label:testOnly?'Тестовое распознавание':'Голосовой каст',type:'checkbox',checked:enabled,click:()=>toHook(WM_APP_TOGGLE,0)},
-    ...(bindingsChanged?[{label:'Клавиши Dota изменились — проверить',click:openSettings}]:[]),
+    ...(bindingsChanged?[{label:'Клавиши Dota изменились — проверить',click:()=>openSettings()}]:[]),
     {label:'Перезапустить',click:()=>requestShutdown(true)},
     {label:'Скопировать отчёт',click:()=>{diagnostics().then(d=>clipboard.writeText(supportReport(d))).catch(e=>log('Ошибка отчёта:',e.message));}},
     {label:'Открыть журнал',click:()=>shell.openPath(LOG_FILE).then(error=>{if(error)log(error);})},
@@ -937,7 +940,7 @@ async function createTray() {
     if(icon.isEmpty())icon=await app.getFileIcon(process.execPath,{size:'small'});
     if(shutdown)return;
     tray=new Tray(icon);trayStateKey='';updateTray();
-    tray.on('double-click',openSettings);
+    tray.on('double-click',()=>openSettings());
   }catch(e){log('Не удалось создать значок в трее:',e.message);openStartupDiagnostics();}
 }
 
@@ -1031,7 +1034,10 @@ app.whenReady().then(async () => {
     createWindow();
     createTray();
     if (firstRun || settingsRequested) { settingsRequested = false; openSettings(); }
-    if(configInvalid||!modelWords||!modelInfo.active||voiceInfo.message)openStartupDiagnostics();
+    if(configInvalid||!modelWords||!modelInfo.active||voiceInfo.message||setupFailedAtStartup)openStartupDiagnostics();
+    startupDiagnosticTimer=setTimeout(()=>{diagnostics().then(d=>{
+      if(!d.dotaFound||!d.gsiInstalled||!d.gsiConfigMatches||!d.itemsConfigured||(d.running===true&&d.launchFlag===false))openStartupDiagnostics();
+    }).catch(e=>log('Проверка старта:',e.message));},10000);
   });
 }).catch(e=>fatalError('Ошибка запуска',e));
 process.on('uncaughtException',e=>fatalError('Критическая ошибка',e));

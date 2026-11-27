@@ -115,10 +115,10 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$(node -p "require('./package.json').version")"
-          if [[ "$tag" != "v1.1.0-rc.7" ]]; then exit 0; fi
+          if [[ "$tag" != "v1.1.1" ]]; then exit 0; fi
           [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" == "$GITHUB_SHA" ]] || exit 0
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $tag already exists; not overwriting."
             exit 0
           fi
-          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz windows-packages/*.zip windows-packages/*.exe windows-packages/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.0-rc.7" --notes-file RELEASE_NOTES.md
+          gh release create "$tag" model/vosk-model-small-ru-invoker.tar.gz windows-packages/*.zip windows-packages/*.exe windows-packages/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.1 (verification build)" --notes-file RELEASE_NOTES.md
