@@ -18,10 +18,9 @@
     "vosk-browser": "^0.0.8"
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "45.5.0"
   },
   "allowScripts": {
-    "electron@38.8.6": true,
     "koffi@2.16.3": true
   }
 }
