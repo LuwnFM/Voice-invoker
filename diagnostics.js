@@ -68,10 +68,15 @@ function processStatus(){
    });
  });return pending;
 }
+function bindingSignature(bindings){
+ if(!bindings||!Object.keys(bindings.keys||{}).length)return null;
+ const ordered=value=>Object.entries(value||{}).sort(([a],[b])=>a.localeCompare(b));
+ return JSON.stringify([ordered(bindings.keys),ordered(bindings.slotCastModes),[...(bindings.warnings||[])].sort()]);
+}
 function supportReport(d){
  // Explicit allowlist. Never copy raw log lines, local paths, microphone labels,
  // Steam account IDs, authentication tokens or user-defined phrases/transcripts.
- const {version,electron,os,running,steamRunning,savedLaunchFlag,launchFlag,dotaFound,gsiInstalled,gsiConfigMatches,itemsConfigured,gsiAgeMs,gsiRejected,hero,alive,slots,abilities,items,bindingMatches,bindingsIssue,bindingWarningsCount,voiceReady,voiceFailed,hookReady,hookFailed,enabled,modelVerified,modelAvailable,modelDictionaryReady,configInvalid,configBackup,experimentalActive,profile,port,serverReady,testOnly,activePhrases,repairFailed,lastCastStatus,effectiveSettings}=d;
- return ['Voice Invoke — отчёт для поддержки',new Date().toISOString(),'== Диагностика ==',JSON.stringify({version,electron,os,running,steamRunning,savedLaunchFlag,launchFlag,dotaFound,gsiInstalled,gsiConfigMatches,itemsConfigured,gsiAgeMs,gsiRejected,hero,alive,slots,abilities,items,bindingMatches,bindingsIssue,bindingWarningsCount,voiceReady,voiceFailed,hookReady,hookFailed,enabled,modelVerified,modelAvailable,modelDictionaryReady,configInvalid,configBackup,experimentalActive,profile,port,serverReady,testOnly,activePhrases,repairFailed,lastCastStatus,effectiveSettings},null,2)].join('\n');
+ const {version,electron,os,running,steamRunning,savedLaunchFlag,launchFlag,dotaFound,gsiInstalled,gsiConfigMatches,itemsConfigured,gsiAgeMs,gsiRejected,hero,alive,slots,abilities,items,bindingMatches,bindingsChanged,bindingsIssue,bindingWarningsCount,voiceReady,voiceFailed,hookReady,hookFailed,enabled,modelVerified,modelAvailable,modelDictionaryReady,configInvalid,configBackup,experimentalActive,profile,port,serverReady,testOnly,activePhrases,repairFailed,lastCastStatus,effectiveSettings}=d;
+ return ['Voice Invoke — отчёт для поддержки',new Date().toISOString(),'== Диагностика ==',JSON.stringify({version,electron,os,running,steamRunning,savedLaunchFlag,launchFlag,dotaFound,gsiInstalled,gsiConfigMatches,itemsConfigured,gsiAgeMs,gsiRejected,hero,alive,slots,abilities,items,bindingMatches,bindingsChanged,bindingsIssue,bindingWarningsCount,voiceReady,voiceFailed,hookReady,hookFailed,enabled,modelVerified,modelAvailable,modelDictionaryReady,configInvalid,configBackup,experimentalActive,profile,port,serverReady,testOnly,activePhrases,repairFailed,lastCastStatus,effectiveSettings},null,2)].join('\n');
 }
-module.exports={processStatus,hasFlag,savedLaunchOptions,discoverDota,chooseAccount,inspectSteam,supportReport};
+module.exports={processStatus,hasFlag,savedLaunchOptions,discoverDota,chooseAccount,inspectSteam,supportReport,bindingSignature};

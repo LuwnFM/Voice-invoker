@@ -100,7 +100,7 @@
 <div class="actions diag-actions"><button id="copyReport">Скопировать отчёт</button><button id="openLogs">Папка с логом</button><button id="refreshReport">Обновить</button><button id="repairGsi">Проверить / восстановить GSI</button><button id="pickDota">Указать папку Dota</button><button id="previewSun">Показать анимацию Sun Strike</button></div>
 <p class="hint">Если что-то не работает, скопируй отчёт. В нём есть версия, состояние GSI, слотов, модели и хука. Локальные пути, имя микрофона, Steam ID, токен GSI, пользовательские фразы и сырые логи не копируются. Журнал можно открыть отдельно.</p>
 <h2>Клавиши в Dota</h2>
-<p class="hint">Должны совпадать с твоими настройками в игре.</p>
+<p class="hint">Должны совпадать с твоими настройками в игре. Изменения отслеживаются автоматически каждые 10 секунд; настройки не меняются и приложение не перезапускается без твоего действия.</p>
 <div class="actions"><button id="importBinds">Считать клавиши Dota</button></div>
 <div class="panel" id="dota"></div>
 
@@ -143,6 +143,9 @@
 <h2>Фразы для слотов предметов</h2>
 <p class="hint">Введи любое слово или фразу из словаря модели, по одной на строку. Пустой список отключает голосовой слот. Фразы отключённых способностей можно использовать здесь; одинаковые активные команды не допускаются. Команда применяет предмет, который находится в этом слоте сейчас. Без свежего GSI предметы не применяются.</p>
 <div id="itemPhrases"></div>
+<h2>Индивидуальный режим каста предметов</h2>
+<p class="hint">Режим конкретного предмета имеет приоритет над режимом его текущего слота. Это не меняет бинды Dota. Выбирай только режим, соответствующий настройкам игры. Добавь предмет из GSI или введи его внутреннее имя (item_…). Голосовые команды по-прежнему относятся к слотам.</p>
+<datalist id="knownItems"></datalist><div id="itemCastModes" class="panel"></div><div class="actions"><button id="addItemMode">Добавить предмет</button></div>
 <h2>Дополнительно</h2>
 <div class="opts"><label><input id="experimentalFrames" type="checkbox"> Экспериментально: frames-per-chunk=3 (выключено по умолчанию)</label>
 <label><input id="testOnly" type="checkbox"> Тест распознавания без нажатий (после перезапуска)</label></div>
@@ -371,6 +374,7 @@
     try{
       const r=await fetch('/diagnostics',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);report=await r.json();
       const d=report,host=$('#diagnostics');
+      const list=$('#knownItems');const names=[...new Set((d.items||[]).filter(n=>typeof n==='string'&&/^item_[a-z0-9_]+$/.test(n)&&n!=='item_empty'))];list.replaceChildren(...names.map(name=>{const option=document.createElement('option');option.value=name;return option;}));
       const local=d.local||{}, keys=local.keys||{};
       /** @type {{title:string,detail:string,status:string,action?:string,target?:string}[]} */
       const rows=[];
@@ -379,7 +383,7 @@
       rows.push({title:'Параметр запуска -gamestateintegration',detail:(d.launchFlag===true?'Параметр присутствует в запущенной Dota.':d.running===false?'Запусти Dota через Start Voice Invoker.bat.':d.launchFlag===false?'Перезапусти Dota через Start Voice Invoker.bat.':'Не удалось проверить параметры процесса.')+' В сохранённых параметрах Steam: '+(d.savedLaunchFlag===true?'есть':d.savedLaunchFlag===false?'нет':'не проверено')+'.',status:d.launchFlag===true?'good':d.launchFlag===false?'bad':'wait'});
       const fresh=d.gsiAgeMs!==null&&d.gsiAgeMs<5000;
       rows.push({title:fresh?(d.hero==='npc_dota_hero_invoker'?'Данные Dota получены — Invoker':d.hero?'Данные идут, но герой не Invoker':'Данные идут, герой не выбран'):d.running===false?'Dota не запущена':d.gsiRejected?'GSI: неверный токен':d.gsiAgeMs===null?(d.running===null?'Статус Dota неизвестен, данных нет':'Dota запущена, но данных нет'):'GSI: данные устарели',detail:fresh?(d.hero==='npc_dota_hero_invoker'?(d.alive?'Герой жив. Слоты: '+(d.slots||[]).join(', '):'Герой мёртв, каст блокируется.'):d.hero?'Сейчас: '+d.hero.replace('npc_dota_hero_','')+'. Каст блокируется.':'Герой появится в тренировочном режиме или матче.'):d.running===false?'Проверка продолжится после запуска игры.':d.gsiRejected?'Восстанови GSI и перезапусти Dota.':d.running===null?'Статус игры неизвестен. Проверь запуск и GSI.':'Проверь GSI, перезапусти игру после установки файла и войди в тренировочный режим. Без GSI способности используют резервный режим, предметы не применяются.',status:fresh?(d.hero==='npc_dota_hero_invoker'&&d.alive?'good':'wait'):d.running===false||d.running===null||d.gsiAgeMs!==null?'wait':'bad',action:'Обновить',target:'#refreshReport'});
-      rows.push({title:d.bindingMatches===true?'Клавиши и режим каста совпадают с Dota':d.bindingMatches===false?'Клавиши Dota требуют проверки':'Клавиши и режим каста',detail:'Сферы '+[keys.quas,keys.wex,keys.exort].join(' ')+', Invoke '+(keys.invoke||'—')+', способности '+[keys.slot1,keys.slot2].join(' ')+', голос '+(local.voiceChatKey||'—')+'. '+(d.bindingMatches===true?'Совпадение проверено.':'Считай бинды, проверь и сохрани настройки.')+(d.bindingsIssue?' Причина: '+({'steam-not-found':'Steam не найден','account-unknown':'не удалось однозначно определить аккаунт','bindings-unreadable':'файл клавиш недоступен','process-unavailable':'проверка процесса недоступна'}[d.bindingsIssue]||'проверка недоступна')+'.':'')+((local.bindingWarnings||[]).length?' '+local.bindingWarnings.join('; '):'')+' Предметы: '+['item1','item2','item3','item4','item5','item6','neutral','teleport'].map(k=>keys[k]||'—').join(' '),status:d.bindingMatches===true&&!d.bindingWarningsCount?'good':'wait',action:'Считать',target:'#importBinds'});
+      rows.push({title:d.bindingMatches===true?'Клавиши и режим каста совпадают с Dota':d.bindingMatches===false?'Клавиши Dota требуют проверки':'Клавиши и режим каста',detail:'Сферы '+[keys.quas,keys.wex,keys.exort].join(' ')+', Invoke '+(keys.invoke||'—')+', способности '+[keys.slot1,keys.slot2].join(' ')+', голос '+(local.voiceChatKey||'—')+'. '+(d.bindingMatches===true?'Совпадение проверено.':d.bindingsChanged?'Бинды изменились с момента запуска. Считай, сохрани и перезапусти вручную.':'Считай бинды, проверь и сохрани настройки.')+(d.bindingsIssue?' Причина: '+({'steam-not-found':'Steam не найден','account-unknown':'не удалось однозначно определить аккаунт','bindings-unreadable':'файл клавиш недоступен','process-unavailable':'проверка процесса недоступна'}[d.bindingsIssue]||'проверка недоступна')+'.':'')+((local.bindingWarnings||[]).length?' '+local.bindingWarnings.join('; '):'')+' Предметы: '+['item1','item2','item3','item4','item5','item6','neutral','teleport'].map(k=>keys[k]||'—').join(' '),status:d.bindingMatches===true&&!d.bindingWarningsCount?'good':'wait',action:'Считать',target:'#importBinds'});
       rows.push({title:d.voiceReady?'Распознавание речи готово':'Распознавание речи не готово',detail:local.voiceMessage||'Ожидание модели и микрофона.',status:d.voiceReady?'good':d.voiceFailed||!d.modelAvailable?'bad':'wait'});
       rows.push({title:d.testOnly?'Тестовый режим без игровых нажатий':d.hookReady&&d.enabled?'Клавиши перехватываются':d.hookReady?'Голосовой каст выключен':'Нативный хук не готов',detail:d.testOnly?'Игровые действия отключены.':d.hookReady?'Ctrl+Shift+F7 — переключить активность.':(d.hookFailed?'Поток хука завершился с ошибкой. ':'Хук ещё не готов. ')+(local.hookError?local.hookError+' ':'')+'Проверь журнал запуска и блокировку антивирусом.',status:d.hookReady?(d.enabled||d.testOnly?'good':'wait'):'bad'});
       rows.push({title:'Модель и версия',detail:d.version+' · '+(d.modelVerified?'V2: SHA-256 OK':'V2 не подтверждена')+' · '+d.activePhrases+' активных фраз · '+d.profile+' · порт '+d.port+(d.experimentalActive?' · экспериментальный режим':''),status:d.modelVerified&&d.serverReady?'good':'wait'});
@@ -424,6 +428,23 @@
       render();status('Импортировано '+Object.keys(d.keys).length+' клавиш. Проверь и сохрани. '+d.warnings.join('; '),d.warnings.length?'bad':'ok');
     }catch(e){status('Импорт: '+e.message,'bad');}
   };
+  function addItemMode(name='',mode='quickcast'){
+    const row=document.createElement('div'),input=document.createElement('input'),select=document.createElement('select'),remove=document.createElement('button');
+    row.className='row';input.className='control';input.style.flex='1';input.style.minWidth='0';input.placeholder='item_…';input.setAttribute('list','knownItems');input.setAttribute('aria-label','Внутреннее имя предмета');input.dataset.itemName='1';input.value=name;
+    select.className='control';select.dataset.itemOverride='1';select.add(new Option('Быстрый каст','quickcast'));select.add(new Option('Обычный каст','click'));select.value=mode;
+    remove.className='control';remove.textContent='×';remove.title='Вернуть режим слота';remove.onclick=()=>{row.remove();status('Есть несохранённые изменения');};
+    row.append(input,select,remove);$('#itemCastModes').append(row);
+  }
+  $('#addItemMode').onclick=()=>addItemMode();
+  function collectItemModes(){
+    const out={};
+    for(const row of $('#itemCastModes').children){
+      const name=(/** @type {HTMLInputElement} */ (row.querySelector('input'))).value.trim().toLowerCase();
+      if(!/^item_[a-z0-9_]{1,100}$/.test(name))throw Error('Укажи внутреннее имя предмета item_…');
+      if(Object.hasOwn(out,name))throw Error('Предмет указан дважды: '+name);
+      out[name]=(/** @type {HTMLSelectElement} */ (row.querySelector('select'))).value;
+    }return out;
+  }
   function collect() {
     return {
       keys: state.keys,
@@ -432,6 +453,7 @@
       experimentalFrames: $('#experimentalFrames').checked,
       testOnly: $('#testOnly').checked,
       slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value,...Object.fromEntries([.../** @type {NodeListOf<HTMLSelectElement>} */ (document.querySelectorAll('[data-item-mode]'))].map(e=>[e.dataset.itemMode,e.value]))},
+      itemCastModes: collectItemModes(),
       itemPhrases: Object.fromEntries([.../** @type {NodeListOf<HTMLTextAreaElement>} */ (document.querySelectorAll('[data-item-phrase]'))].map(e=>[e.dataset.itemPhrase,e.value.split(/\r?\n/).filter(p=>p.trim())])),
       voiceChatKey: state.voice,
       castMode: (/** @type {HTMLInputElement} */ (document.querySelector('input[name=castMode]:checked')))?.value,
@@ -466,6 +488,7 @@
   fetch('/config').then((r) => r.json()).then((c) => {
     state.keys = { ...c.keys };
     state.slotModes=c.slotCastModes||{};buildItemPhrases(c);
+    for(const [name,mode] of Object.entries(c.itemCastModes||{}))addItemMode(name,String(mode));
     state.voice = String(c.voiceChatKey || '').toUpperCase();
     for (const k of Object.keys(state.keys)) state.keys[k] = String(state.keys[k]).toUpperCase();
     const pick = (name, v) => { const i = /** @type {HTMLInputElement} */ (document.querySelector(`input[name=${name}][value="${v}"]`)); if (i) i.checked = true; };

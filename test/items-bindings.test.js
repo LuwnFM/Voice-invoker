@@ -49,3 +49,22 @@ test('disabled spell alias may be reused by an item; re-enabling it conflicts',(
  assert.deepEqual(validateItemPhrases(raw,dict,allowed).phrases[ITEM_SLOTS[0].id],['эмп']);
  assert.throws(()=>validateItemPhrases(raw,dict,enabledPhrases(all,{}, {},true)));
 });
+
+test('item-name mode follows the item between slots; slot fallback is preserved',()=>{
+ const {validateItemCastModes}=require('../items');
+ const item={name:'item_force_staff',cooldown:0,can_cast:true};
+ const config={keys:{item1:'X',item2:'Y'},slotCastModes:{item1:'quickcast',item2:'click'},itemCastModes:validateItemCastModes({item_force_staff:'click'})};
+ const gsi={at:100,hero:'npc_dota_hero_invoker',alive:true,items:[item,item]};
+ for(const spell of ITEM_SLOTS.slice(0,2))assert.equal(planItem(spell,gsi,config,false,101).action,ACTION.SLOT1);
+ config.itemCastModes={item_force_staff:'quickcast'};assert.equal(planItem(ITEM_SLOTS[1],gsi,config,false,101).action,ACTION.SLOT2);
+ config.itemCastModes={};assert.equal(planItem(ITEM_SLOTS[1],gsi,config,false,101).action,ACTION.SLOT1);
+ for(const invalid of [{__proto__:null,item_force_staff:'other'},{not_item:'click'},[]])assert.throws(()=>validateItemCastModes(invalid));
+});
+test('binding changes detect keys or cast modes, not property order',()=>{
+ const {bindingSignature}=require('../diagnostics');
+ const a={keys:{quas:'Q',wex:'W'},slotCastModes:{slot1:'click'},warnings:[]};
+ assert.equal(bindingSignature(a),bindingSignature({...a,keys:{wex:'W',quas:'Q'}}));
+ assert.notEqual(bindingSignature(a),bindingSignature({...a,slotCastModes:{slot1:'quickcast'}}));
+ assert.notEqual(bindingSignature(a),bindingSignature({...a,keys:{quas:'A',wex:'W'}}));
+ assert.equal(bindingSignature(null),null);
+});
