@@ -12,7 +12,9 @@ if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -F
 New-Item -ItemType Directory -Path $stage,$app | Out-Null
 Copy-Item -Path (Join-Path $root 'node_modules\electron\dist\*') -Destination $stage -Recurse -Force
 Rename-Item -LiteralPath (Join-Path $stage 'electron.exe') -NewName 'VoiceInvoker.exe'
-Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Extension -in @('.js','.html','.json','.cfg','.wav','.bat','.ps1','.md') -and $_.Name -notlike '.*' } | Copy-Item -Destination $app
+$iconFile=Join-Path $out 'VoiceInvoker.ico'
+& (Join-Path $PSScriptRoot 'brand-windows.ps1') -Exe (Join-Path $stage 'VoiceInvoker.exe') -Png (Join-Path $root 'icon.png') -Ico $iconFile
+Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Extension -in @('.js','.html','.json','.cfg','.wav','.bat','.ps1','.md','.png') -and $_.Name -notlike '.*' } | Copy-Item -Destination $app
 foreach ($dir in @('scripts','docs')) { Copy-Item -LiteralPath (Join-Path $root $dir) -Destination $app -Recurse }
 New-Item -ItemType Directory -Path (Join-Path $app 'node_modules'),(Join-Path $app 'model') | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $root 'node_modules') -Force | Where-Object { $_.Name -notin @('electron','.bin','.package-lock.json') } | Copy-Item -Destination (Join-Path $app 'node_modules') -Recurse -Force
@@ -51,8 +53,12 @@ if ($Installer) {
     }
     [IO.File]::WriteAllLines($remove,[string[]]$lines,[Text.UTF8Encoding]::new($false))
     $exe = Join-Path $out "VoiceInvoker-Setup-$version.exe"
-    & $makensis "/DVERSION=$version" "/DSTAGE=$stage" "/DOUTFILE=$exe" "/DREMOVEFILES=$remove" (Join-Path $root 'installer.nsi')
+    & $makensis "/DVERSION=$version" "/DSTAGE=$stage" "/DOUTFILE=$exe" "/DREMOVEFILES=$remove" "/DICONFILE=$iconFile" (Join-Path $root 'installer.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
     & (Join-Path $PSScriptRoot 'installer-smoke.ps1') -Installer $exe
 }
+$packages=@($zip)
+if($Installer){$packages+=@($exe)}
+$checksums=@(foreach($package in $packages){(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+[IO.Path]::GetFileName($package)})
+[IO.File]::WriteAllLines((Join-Path $out 'SHA256SUMS.txt'),[string[]]$checksums,[Text.UTF8Encoding]::new($false))
 Write-Host "Windows packages: $out"

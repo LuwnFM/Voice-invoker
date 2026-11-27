@@ -5,6 +5,8 @@ OutFile "${OUTFILE}"
 InstallDir "$LOCALAPPDATA\VoiceInvoker"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
+Icon "${ICONFILE}"
+UninstallIcon "${ICONFILE}"
 Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles

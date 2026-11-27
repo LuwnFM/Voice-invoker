@@ -1,7 +1,7 @@
 // Голосовой каст Инвокера: говоришь название способности — она собирается и применяется.
 // Хук клавиатуры и нажатия — в отдельном потоке (hook-worker.js), распознавание речи —
 // офлайн через Vosk в окне оверлея, состояние способностей — из Dota GSI.
-const { app, BrowserWindow, screen, session, Tray, Menu, dialog, shell, clipboard } = require('electron');
+const { app, BrowserWindow, screen, session, Tray, Menu, dialog, shell, clipboard, nativeImage } = require('electron');
 const { Worker } = require('worker_threads');
 // Acquire before touching logs, model or native hooks. Same app name across releases.
 if (!app.requestSingleInstanceLock()) {
@@ -11,6 +11,7 @@ if (!app.requestSingleInstanceLock()) {
 let settingsRequested = process.env.VI_REOPEN_SETTINGS === '1' || process.argv.includes('--vi-reopen-settings');
 let serverReady = false;
 let tray = null;
+let trayStateKey='', diagnosticsAutoOpened=false, voiceEverReady=false, fatalShown=false;
 app.on('second-instance', () => {
   if (serverReady && !shutdown) openSettings();
   else settingsRequested = true;
@@ -629,6 +630,7 @@ async function watchBindings(){
     if(!signature||shutdown)return;
     if(lastBindingSignature!==null&&signature!==lastBindingSignature){
       bindingsChanged=true;
+      updateTray();
       log('Изменились бинды Dota. Импортируй и сохрани настройки вручную; автоперезапуск отключён.');
       if(tray&&!tray.isDestroyed())try{tray.displayBalloon({title:'Voice Invoker — клавиши Dota изменились',content:'Проверь настройки. Автоматический перезапуск не выполняется.'});}catch{}
     }
@@ -660,6 +662,11 @@ async function diagnostics() {
   return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingsChanged:bindingsChanged&&bindingMatches!==true,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,lastCastStatus,effectiveSettings};
 }
 let settingsWin = null;
+function openStartupDiagnostics(){
+  if(diagnosticsAutoOpened||shutdown||!serverReady)return;
+  diagnosticsAutoOpened=true;
+  if(!settingsWin||settingsWin.isDestroyed()||!settingsWin.isVisible())openSettings();
+}
 function openSettings() {
   if (shutdown || !serverReady) return;
   if (settingsWin && !settingsWin.isDestroyed()) {
@@ -669,7 +676,7 @@ function openSettings() {
   }
   settingsWin = new BrowserWindow({
     width: Math.min(680,screen.getPrimaryDisplay().workAreaSize.width), height: Math.min(880,screen.getPrimaryDisplay().workAreaSize.height), minWidth: 480, title: 'Voice Invoke — настройки',
-    backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true,
+    backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true, icon: path.join(__dirname,'icon.png'),
   });
   settingsWin.setMenu(null);
   settingsWin.webContents.setWindowOpenHandler(()=>({action:'deny'}));
@@ -708,6 +715,7 @@ async function handleRequest(req,res){
     return;
   }
   if (p === '/' || p === '/overlay.html') return sendFile(res, path.join(__dirname, 'overlay.html'), 'text/html; charset=utf-8');
+  if (p === '/icon.png') return sendFile(res,path.join(__dirname,'icon.png'),'image/png');
   if (p === '/sounds/keys.wav') return sendFile(res, path.join(__dirname, 'keys.wav'), 'audio/wav');
   if (p === '/vosk.js') return sendFile(res, require.resolve('vosk-browser/dist/vosk.js'), 'text/javascript');
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
@@ -792,6 +800,8 @@ async function handleRequest(req,res){
     voiceReady = ready === true;
     if(!voiceReady)discardWaiting();
     voiceInfo = {ready:voiceReady,message:String(message||'')};
+    if(voiceReady)voiceEverReady=true;
+    else if(!voiceEverReady&&message)openStartupDiagnostics();
     toHook(WM_APP_VOICE_READY, voiceReady ? 1 : 0);
     return done();
   }
@@ -823,6 +833,7 @@ function startWorker() {
     if (m.type === 'state') {
       if (shutdown) return;
       last = { state: m.state };
+      updateTray();
       if (!m.state.enabled || !m.state.voiceReady) discardWaiting();
       broadcast({ ...last, event: m.event });
       if (m.event === 'profile') log('Режим задержек:', profileLabel(m.state.timingProfile));
@@ -830,7 +841,7 @@ function startWorker() {
       if (m.event === 'toggle') log(m.state.enabled ? 'Голосовой каст ВКЛЮЧЁН' : 'Голосовой каст ВЫКЛЮЧЕН');
     }
   });
-  worker.on('error', (e) => {hookFailed=true;hookError=String(e.message||e);log('Ошибка потока хука:', e.stack || e);});
+  worker.on('error', (e) => {hookFailed=true;hookError=String(e.message||e);log('Ошибка потока хука:', e.stack || e);fatalError('Нативный хук завершился с ошибкой',e);});
   worker.on('exit', (code) => {
     hookWorker = null;
     hookThreadId = 0;
@@ -840,6 +851,7 @@ function startWorker() {
     discardWaiting();
     if(last){last={state:{...last.state,enabled:false,listening:false}};broadcast({...last,event:'toggle'});}
     if (activeCast) handleCastComplete({ id: activeCast.id, ok: false, reason: 'Поток ввода завершён', profile: activeCast.profile, elapsedMs: 0 });
+    fatalError('Поток ввода неожиданно завершился',new Error('Код: '+code));
   });
 }
 
@@ -889,23 +901,40 @@ app.on('before-quit', (event) => {
   if (!exiting) { event.preventDefault(); requestShutdown(false); }
 });
 
+function fatalError(title,error){
+  if(fatalShown||shutdown)return;
+  fatalShown=true;
+  const message=String(error?.message||error||'Неизвестная ошибка');
+  log('Критическая ошибка:',title,error?.stack||message);
+  requestShutdown(false,1);
+  dialog.showErrorBox('Voice Invoker — '+title,message+'\n\nЖурнал: '+LOG_FILE+'\nНастройки сохранены. Приложение завершает работу.');
+}
+function updateTray(){
+  if(!tray||tray.isDestroyed()||shutdown)return;
+  const enabled=!!last?.state.enabled;
+  const key=String(enabled)+':'+bindingsChanged+':'+testOnly;
+  if(trayStateKey===key)return;trayStateKey=key;
+  tray.setToolTip('Voice Invoker — '+(testOnly?'тест без нажатий':enabled?'каст включён':'каст выключен'));
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {label:'Настройки / диагностика',click:openSettings},
+    {label:testOnly?'Тестовое распознавание':'Голосовой каст',type:'checkbox',checked:enabled,click:()=>toHook(WM_APP_TOGGLE,0)},
+    ...(bindingsChanged?[{label:'Клавиши Dota изменились — проверить',click:openSettings}]:[]),
+    {label:'Перезапустить',click:()=>requestShutdown(true)},
+    {label:'Скопировать отчёт',click:()=>{diagnostics().then(d=>clipboard.writeText(supportReport(d))).catch(e=>log('Ошибка отчёта:',e.message));}},
+    {label:'Открыть журнал',click:()=>shell.openPath(LOG_FILE).then(error=>{if(error)log(error);})},
+    {label:'Папка журналов',click:()=>shell.openPath(DATA_DIR)},
+    {type:'separator'},
+    {label:'Выйти из Voice Invoker',click:()=>requestShutdown(false)}
+  ]));
+}
 async function createTray() {
   try {
-    const icon = await app.getFileIcon(process.execPath, { size: 'small' });
-    if (shutdown) return;
-    tray = new Tray(icon);
-    tray.setToolTip('Voice Invoker — работает');
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Настройки', click: openSettings },
-      { label: 'Включить / выключить распознавание', click: () => toHook(WM_APP_TOGGLE,0) },
-      { label: 'Перезапустить', click: () => requestShutdown(true) },
-      { label: 'Открыть журнал', click: () => shell.openPath(LOG_FILE).then(error => { if (error) log(error); }) },
-      { label: 'Папка журналов', click: () => shell.openPath(DATA_DIR) },
-      { type: 'separator' },
-      { label: 'Выйти из Voice Invoker', click: () => requestShutdown(false) },
-    ]));
-    tray.on('double-click', openSettings);
-  } catch (e) { log('Не удалось создать значок в трее:', e.message); }
+    let icon=nativeImage.createFromPath(path.join(__dirname,'icon.png'));
+    if(icon.isEmpty())icon=await app.getFileIcon(process.execPath,{size:'small'});
+    if(shutdown)return;
+    tray=new Tray(icon);trayStateKey='';updateTray();
+    tray.on('double-click',openSettings);
+  }catch(e){log('Не удалось создать значок в трее:',e.message);openStartupDiagnostics();}
 }
 
 // ---------- Окно поверх игры (в нём же работает распознавание) ----------
@@ -918,7 +947,7 @@ function createWindow() {
 
   const { bounds } = screen.getPrimaryDisplay();
   const win = new BrowserWindow({
-    ...bounds,
+    ...bounds, icon:path.join(__dirname,'icon.png'),
     transparent: true,
     frame: false,
     resizable: false,
@@ -972,6 +1001,7 @@ app.whenReady().then(async () => {
     }
   } catch (e) {
     log('Не удалось подготовить модель распознавания, голос работать не будет:', e.message);
+    voiceInfo={ready:false,message:'Не удалось подготовить модель: '+e.message};
   }
   if (shutdown) return;
   if (skipped.length) log(`Фразы не по-русски пропущены (слушает только русская модель): ${skipped.join(', ')}`);
@@ -979,9 +1009,8 @@ app.whenReady().then(async () => {
     if ('code' in e && e.code === 'EADDRINUSE') {
       log(`Порт ${config.port} уже занят (плагин уже запущен или порт занят другой программой).`);
       log('Проверь владельца порта: Get-NetTCPConnection -LocalPort ' + config.port + ' -State Listen');
-      dialog.showErrorBox('Voice Invoker: порт занят', 'Порт ' + config.port + ' уже используется. Закрой предыдущий Voice Invoker или проверь владельца порта. Порт автоматически не меняется.');
-    } else log('Ошибка сервера:', e.message);
-    requestShutdown(false, 1);
+      fatalError('Порт занят',new Error('Порт '+config.port+' уже используется. Проверь владельца порта. Порт автоматически не меняется.'));
+    } else fatalError('Ошибка локального сервера',e);
   });
   server.listen(config.port, '127.0.0.1', () => {
     if (shutdown) return;
@@ -998,7 +1027,10 @@ app.whenReady().then(async () => {
     createWindow();
     createTray();
     if (firstRun || settingsRequested) { settingsRequested = false; openSettings(); }
+    if(configInvalid||!modelWords||!modelInfo.active||voiceInfo.message)openStartupDiagnostics();
   });
-});
+}).catch(e=>fatalError('Ошибка запуска',e));
+process.on('uncaughtException',e=>fatalError('Критическая ошибка',e));
+process.on('unhandledRejection',e=>fatalError('Необработанная ошибка',e));
 app.on('window-all-closed', () => requestShutdown(false));
 }
