@@ -67,7 +67,11 @@ if ($Uninstall) {
 }
 $steam = $null
 try { $steam = Find-Steam } catch { if ($Launch) { throw } }
-try { if (-not $steam) { throw 'Steam not found.' }; $dota = Find-Dota $steam } catch {
+if ($DotaPath) {
+    $manual = $DotaPath.Trim('"')
+    if (-not (Test-Path -LiteralPath (Join-Path $manual 'game\bin\win64\dota2.exe') -PathType Leaf)) { throw 'Invalid Dota 2 folder.' }
+    $dota = (Resolve-Path -LiteralPath $manual).Path
+} else { try { if (-not $steam) { throw 'Steam not found.' }; $dota = Find-Dota $steam } catch {
     $manual = $null
     if (Test-Path -LiteralPath $statePath) {
         try {
@@ -76,14 +80,13 @@ try { if (-not $steam) { throw 'Steam not found.' }; $dota = Find-Dota $steam } 
             if (Test-Path -LiteralPath (Join-Path $candidate 'game\bin\win64\dota2.exe') -PathType Leaf) { $manual = $candidate }
         } catch {}
     }
-    if (-not $manual -and $DotaPath) { $manual = $DotaPath }
     if (-not $manual -and $NoPrompt) { throw 'DOTA_NOT_FOUND' }
     if (-not $manual) { $manual = Read-Host 'Dota 2 not detected. Enter installation folder (contains game) or leave empty to cancel' }
     if (-not $manual) { throw 'Dota 2 installation not found.' }
     $manual = $manual.Trim('"')
     if (-not (Test-Path -LiteralPath (Join-Path $manual 'game\bin\win64\dota2.exe') -PathType Leaf)) { throw 'Invalid Dota 2 folder.' }
     $dota = (Resolve-Path -LiteralPath $manual).Path
-}
+} }
 $folder = Join-Path $dota 'game\dota\cfg\gamestate_integration'
 $target = Join-Path $folder $cfgName
 $source = Get-Content -LiteralPath (Join-Path $root $cfgName) -Raw

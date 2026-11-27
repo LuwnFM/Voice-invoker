@@ -577,8 +577,8 @@ function saveSettings(body) {
   log('Настройки сохранены в config.json');
 }
 
-let repairingGsi=false, repairFailed=false, hookFailed=false, lastCastStatus=null;
-async function repairGsi(){
+let repairingGsi=false, repairFailed=false, hookFailed=false, hookError='', lastCastStatus=null;
+async function repairGsi(pick=false){
   if(repairingGsi)return {ok:false,error:'Восстановление уже выполняется'};
   repairingGsi=true;
   const run=folder=>new Promise((resolve,reject)=>{
@@ -591,15 +591,24 @@ async function repairGsi(){
   try {
     const confirm=await dialog.showMessageBox({type:'question',buttons:['Восстановить','Отмена'],defaultId:1,cancelId:1,title:'Voice Invoker',message:'Проверить и восстановить только файл GSI Voice Invoker?',detail:'Steam и Dota не будут закрыты, личные бинды и параметры Steam не изменяются.'});
     if(confirm.response!==0)return {ok:false,error:'Отменено'};
-    try {await run();}catch(e){
-      if(!e.message.includes('DOTA_NOT_FOUND'))throw e;
+    const choose=async()=>{
       const choice=await dialog.showOpenDialog({title:'Выбери папку установки Dota 2 (с папкой game)',properties:['openDirectory']});
-      if(choice.canceled||!choice.filePaths[0])return {ok:false,error:'Папка не выбрана'};
-      await run(choice.filePaths[0]);
+      if(choice.canceled||!choice.filePaths[0])return null;
+      let folder=choice.filePaths[0];
+      for(let i=0;i<5;i++){
+        if(fs.existsSync(path.join(folder,'game','bin','win64','dota2.exe')))return folder;
+        const parent=path.dirname(folder);if(parent===folder)break;folder=parent;
+      }
+      throw Error('INVALID_DOTA_FOLDER');
+    };
+    if(pick){const folder=await choose();if(!folder)return {ok:false,error:'Папка не выбрана'};await run(folder);}
+    else try{await run();}catch(e){
+      if(!e.message.includes('DOTA_NOT_FOUND'))throw e;
+      const folder=await choose();if(!folder)return {ok:false,error:'Папка не выбрана'};await run(folder);
     }
     repairFailed=false;
     return {ok:true,message:'GSI проверен. Если игра была открыта, перезапусти Dota для загрузки файла.'};
-  }catch(e){repairFailed=true;log('Ошибка восстановления GSI:',e.message);return {ok:false,error:'Не удалось восстановить GSI. Проверь журнал и разрешения Windows; при блокировке скрипта используй start.bat.'};}
+  }catch(e){repairFailed=true;log('Ошибка восстановления GSI:',e.message);return {ok:false,error:e.message.includes('INVALID_DOTA_FOLDER')?'В выбранной папке не найдена Dota 2.':e.message.includes('Dota moved')?'Привязка GSI осталась к другой папке. Сначала восстанови предыдущую интеграцию через setup-dota.ps1 -Uninstall.':e.message.includes('changed externally')?'GSI изменён вне приложения. Исходный файл сохранён; проверь журнал.':'Не удалось восстановить GSI. Проверь журнал и разрешения Windows; при блокировке скрипта используй start.bat.'};}
   finally{repairingGsi=false;}
 }
 async function diagnostics() {
@@ -620,9 +629,10 @@ async function diagnostics() {
   const binds=proc.bindings;
   const required=['quas','wex','exort','invoke','slot1','slot2','voice'];
   const bindingMatches=binds ? required.every(k=>!!binds.keys[k]) && Object.entries(binds.keys).every(([key,value])=>(key==='voice'?config.voiceChatKey:config.keys[key])===value) && Object.entries(binds.slotCastModes).every(([key,value])=>(config.slotCastModes?.[key]||(ITEM_KEYS.includes(key)?'quickcast':config.castMode))===value) : null;
+  const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default'};
   const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
   const abilities=gsi?Object.fromEntries(Object.values(gsi.abilities).filter(a=>gameName(a.name)).map(a=>[a.name,{level:Number.isFinite(a.level)?a.level:null,cooldown:Number.isFinite(a.cooldown)?a.cooldown:null,canCast:a.can_cast===true}])):null;
-  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,keys:config.keys,voiceChatKey:config.voiceChatKey,bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,lastCastStatus};
+  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingsIssue:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,lastCastStatus,effectiveSettings};
 }
 let settingsWin = null;
 function openSettings() {
@@ -633,7 +643,7 @@ function openSettings() {
     return settingsWin.focus();
   }
   settingsWin = new BrowserWindow({
-    width: 680, height: 880, minWidth: 480, title: 'Voice Invoke — настройки',
+    width: Math.min(680,screen.getPrimaryDisplay().workAreaSize.width), height: Math.min(880,screen.getPrimaryDisplay().workAreaSize.height), minWidth: 480, title: 'Voice Invoke — настройки',
     backgroundColor: '#0b0e11', autoHideMenuBar: true, alwaysOnTop: true,
   });
   settingsWin.setMenu(null);
@@ -678,8 +688,8 @@ async function handleRequest(req,res){
   if (p === '/voice-capture.js') return sendFile(res, path.join(__dirname, 'voice-capture.js'), 'text/javascript');
   if (p === '/phrase-parser.js') return sendFile(res, path.join(__dirname, 'phrase-parser.js'), 'text/javascript');
   if (p === '/settings') return sendFile(res, path.join(__dirname, 'settings.html'), 'text/html; charset=utf-8');
-  if (p === '/repair-gsi' && req.method === 'POST') {
-    res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify(await repairGsi()));
+  if ((p === '/repair-gsi'||p === '/pick-dota') && req.method === 'POST') {
+    res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify(await repairGsi(p==='/pick-dota')));
   }
   if (p === '/open-logs' && req.method === 'POST') {
     await shell.openPath(__dirname);return done();
@@ -780,7 +790,7 @@ function startWorker() {
     if (m.type === 'step' && config.debugSteps) return log('Шаг:', m.edge, m.step, Math.round(m.elapsedMs) + ' мс');
     if (m.type === 'settings') return openSettings();
     if (m.type === 'ready') {
-      hookThreadId = m.threadId;hookFailed=false;
+      hookThreadId = m.threadId;hookFailed=false;hookError='';
       log('Хук клавиатуры установлен');
       if (shutdown) return toHook(WM_APP_QUIT, 0);
       return toHook(WM_APP_VOICE_READY, voiceReady ? 1 : 0);
@@ -795,12 +805,12 @@ function startWorker() {
       if (m.event === 'toggle') log(m.state.enabled ? 'Голосовой каст ВКЛЮЧЁН' : 'Голосовой каст ВЫКЛЮЧЕН');
     }
   });
-  worker.on('error', (e) => {hookFailed=true;log('Ошибка потока хука:', e.stack || e);});
+  worker.on('error', (e) => {hookFailed=true;hookError=String(e.message||e);log('Ошибка потока хука:', e.stack || e);});
   worker.on('exit', (code) => {
     hookWorker = null;
     hookThreadId = 0;
     if (shutdown) return finishShutdown();
-    hookFailed=true;
+    hookFailed=true;hookError='Код завершения: '+code;
     log('Поток ввода завершён, код:', code);
     discardWaiting();
     if(last){last={state:{...last.state,enabled:false,listening:false}};broadcast({...last,event:'toggle'});}

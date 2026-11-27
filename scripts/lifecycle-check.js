@@ -56,7 +56,9 @@ async function ready(previous=0) {
   const duplicate=start();
   assert.equal(pid(),first);
   await waitFor('duplicate opens settings',()=>fs.existsSync(path.join(dir,'settings-'+first)));
-  console.log('Duplicate launch: existing instance settings visible');
+  await waitFor('original-style diagnostic controls rendered',()=>fs.existsSync(path.join(dir,'diagnostics-ui-'+first)));
+  console.log('Duplicate launch: existing instance settings and diagnostic controls visible');
+  const reportResponse=await fetch(base+'/copy-report',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(reportResponse.status,204);
   // Disabled aliases must disappear from the live grammar after restart.
   const preferences=await (await fetch(base+'/config')).json();
   const disabled={...preferences.disabledPhrases,invoker_emp:preferences.phraseCatalog.invoker_emp};
