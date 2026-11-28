@@ -1,0 +1,50 @@
+name: Native dependency audit
+on:
+  push:
+    branches: [rust-native-2.0]
+    paths:
+      - 'rust-native/Cargo.toml'
+      - 'rust-native/Cargo.lock'
+      - '.github/workflows/rust-native-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: rust-native
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve Cargo dependencies
+        run: |
+          test -f Cargo.lock || cargo generate-lockfile
+          cargo metadata --locked --format-version 1 --no-deps > metadata.json
+          echo LOCKFILE_BEGIN
+          cat Cargo.lock
+          echo LOCKFILE_END
+      - name: Download verified RustSec audit executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 'https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.23.0/cargo-audit-x86_64-unknown-linux-gnu-v0.23.0.tgz' -o "$RUNNER_TEMP/cargo-audit.tgz"
+          echo 'b77993532b253fcbf550996d7716465ec3d734d4e74e7f87bfb65a19add0fb59  '\"$RUNNER_TEMP/cargo-audit.tgz\" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/audit-bin"
+          tar -xzf "$RUNNER_TEMP/cargo-audit.tgz" -C "$RUNNER_TEMP/audit-bin"
+          audit=$(find "$RUNNER_TEMP/audit-bin" -type f -name cargo-audit -print -quit)
+          test -n "$audit"
+          "$audit" --version
+          "$audit" audit --file Cargo.lock --json > audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-dependency-audit
+          path: |
+            rust-native/Cargo.lock
+            rust-native/metadata.json
+            rust-native/audit.json
