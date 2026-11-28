@@ -74,13 +74,13 @@ jobs:
         if: matrix.node == '22'
         timeout-minutes: 8
         shell: powershell
-        run: .\scripts\installer-smoke.ps1 -Installer (Get-Item build-output/VoiceInvoker-Setup-1.1.1a.exe).FullName
+        run: .\scripts\installer-smoke.ps1 -Installer (Get-Item build-output/VoiceInvoker-Installer-1.1.1b.exe).FullName
       - uses: actions/upload-artifact@v4
         if: matrix.node == '22'
         with:
           name: windows-packages
           path: |
-            build-output/VoiceInvoker-Setup-*.exe
+            build-output/VoiceInvoker-Installer-*.exe
             build-output/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 7
@@ -109,16 +109,16 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$(node -p "require('./package.json').releaseVersion || require('./package.json').version")"
-          if [[ "$tag" != "v1.1.1a" ]]; then exit 0; fi
+          if [[ "$tag" != "v1.1.1b" ]]; then exit 0; fi
           [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" == "$GITHUB_SHA" ]] || exit 0
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $tag already exists; not overwriting."
             exit 0
           fi
-          installer="windows-packages/VoiceInvoker-Setup-1.1.1a.exe"
+          installer="windows-packages/VoiceInvoker-Installer-1.1.1b.exe"
           test -f "$installer"
           cp RELEASE_NOTES.md release-notes.txt
           printf '\n## SHA-256\n\n```text\n' >> release-notes.txt
           cat windows-packages/SHA256SUMS.txt >> release-notes.txt
           printf '```\n' >> release-notes.txt
-          gh release create "$tag" "$installer" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.1a" --notes-file release-notes.txt
+          gh release create "$tag" "$installer" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Voice Invoker 1.1.1b" --notes-file release-notes.txt

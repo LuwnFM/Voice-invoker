@@ -20,7 +20,11 @@ foreach ($dir in @('scripts','docs')) { Copy-Item -LiteralPath (Join-Path $root 
 New-Item -ItemType Directory -Path (Join-Path $app 'node_modules'),(Join-Path $app 'model') | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $root 'node_modules') -Force | Where-Object { $_.Name -notin @('electron','.bin','.package-lock.json') } | Copy-Item -Destination (Join-Path $app 'node_modules') -Recurse -Force
 Copy-Item -LiteralPath $model -Destination (Join-Path $app 'model')
-Set-Content -LiteralPath (Join-Path $stage 'Start Voice Invoker.bat') -Encoding Ascii -Value '@echo off','call "%~dp0resources\app\start.bat"'
+$csc=Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if(-not (Test-Path -LiteralPath $csc)){throw 'Windows .NET Framework C# compiler missing'}
+$launcher=Join-Path $stage 'VoiceInvoker-Launcher.exe'
+& $csc /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll "/win32icon:$iconFile" "/out:$launcher" (Join-Path $PSScriptRoot 'windows-launcher.cs')
+if($LASTEXITCODE -ne 0){throw 'GUI launcher compilation failed'}
 if (-not $Installer) {
 $pkgPath = Join-Path $app 'package.json'
 $original = [IO.File]::ReadAllText($pkgPath)
@@ -55,7 +59,62 @@ if ($Installer) {
         $lines += ('RMDir "$INSTDIR\' + $rel.Replace('$','$$') + '"')
     }
     [IO.File]::WriteAllLines($remove,[string[]]$lines,[Text.UTF8Encoding]::new($false))
-    $exe = Join-Path $out "VoiceInvoker-Setup-$version.exe"
+    # Generate a manifest and a conditional extraction instruction for each package file.
+    $packageFiles=@(Get-ChildItem -LiteralPath $stage -Recurse -File -Force | Where-Object { $_.FullName.Substring($stage.Length+1) -ne 'resources\app\config.json' } | Sort-Object FullName)
+    $entries=@()
+    $copy=@()
+    $lastDir=''
+    foreach($f in $packageFiles){
+        $rel=$f.FullName.Substring($stage.Length+1)
+        $entries+=@{path=$rel;sha256=(Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
+        $parent=Split-Path -Parent $rel
+        if($parent -ne $lastDir -or $copy.Count -eq 0){
+            $outPath=if($parent){'$INSTDIR\'+$parent.Replace('
+    Write-Host ('['+(Get-Date -Format o)+'] NSIS compression started')
+    & $makensis "/DVERSION=$version" "/DSTAGE=$stage" "/DOUTFILE=$exe" "/DREMOVEFILES=$remove" "/DICONFILE=$iconFile" "/DPACKAGEMANIFEST=$manifestPath" "/DCOPYFILES=$copyPath" (Join-Path $root 'installer.nsi')
+    if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
+    Write-Host ('['+(Get-Date -Format o)+'] NSIS compression completed')
+    if(-not $SkipInstallerSmoke){& (Join-Path $PSScriptRoot 'installer-smoke.ps1') -Installer $exe}
+}
+$packages=if($Installer){@($exe)}else{@($zip)}
+$checksums=@(foreach($package in $packages){(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+[IO.Path]::GetFileName($package)})
+[IO.File]::WriteAllLines((Join-Path $out 'SHA256SUMS.txt'),[string[]]$checksums,[Text.UTF8Encoding]::new($false))
+Write-Host "Windows packages: $out"
+,'$')}else{'$INSTDIR'}
+            $copy+=('SetOutPath "'+$outPath+'"')
+            $lastDir=$parent
+        }
+        $escaped=$rel.Replace('
+    Write-Host ('['+(Get-Date -Format o)+'] NSIS compression started')
+    & $makensis "/DVERSION=$version" "/DSTAGE=$stage" "/DOUTFILE=$exe" "/DREMOVEFILES=$remove" "/DICONFILE=$iconFile" (Join-Path $root 'installer.nsi')
+    if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
+    Write-Host ('['+(Get-Date -Format o)+'] NSIS compression completed')
+    if(-not $SkipInstallerSmoke){& (Join-Path $PSScriptRoot 'installer-smoke.ps1') -Installer $exe}
+}
+$packages=if($Installer){@($exe)}else{@($zip)}
+$checksums=@(foreach($package in $packages){(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+[IO.Path]::GetFileName($package)})
+[IO.File]::WriteAllLines((Join-Path $out 'SHA256SUMS.txt'),[string[]]$checksums,[Text.UTF8Encoding]::new($false))
+Write-Host "Windows packages: $out"
+,'$')
+        $copy+=('IfFileExists "$PLUGINSDIR\keep\'+$escaped+'" +2 0')
+        $copy+=('File "'+$f.FullName.Replace('
+    Write-Host ('['+(Get-Date -Format o)+'] NSIS compression started')
+    & $makensis "/DVERSION=$version" "/DSTAGE=$stage" "/DOUTFILE=$exe" "/DREMOVEFILES=$remove" "/DICONFILE=$iconFile" (Join-Path $root 'installer.nsi')
+    if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }
+    Write-Host ('['+(Get-Date -Format o)+'] NSIS compression completed')
+    if(-not $SkipInstallerSmoke){& (Join-Path $PSScriptRoot 'installer-smoke.ps1') -Installer $exe}
+}
+$packages=if($Installer){@($exe)}else{@($zip)}
+$checksums=@(foreach($package in $packages){(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()+'  '+[IO.Path]::GetFileName($package)})
+[IO.File]::WriteAllLines((Join-Path $out 'SHA256SUMS.txt'),[string[]]$checksums,[Text.UTF8Encoding]::new($false))
+Write-Host "Windows packages: $out"
+,'$')+'"')
+    }
+    $manifestPath=Join-Path $out 'package-manifest.json'
+    [IO.File]::WriteAllText($manifestPath,(ConvertTo-Json -InputObject $entries -Depth 3 -Compress),[Text.UTF8Encoding]::new($false))
+    $copyPath=Join-Path $out 'install-changed.nsh'
+    [IO.File]::WriteAllLines($copyPath,[string[]]$copy,[Text.UTF8Encoding]::new($false))
+    $exe = Join-Path $out "VoiceInvoker-Installer-$version.exe"
     Write-Host ('['+(Get-Date -Format o)+'] NSIS compression started')
     & $makensis "/DVERSION=$version" "/DSTAGE=$stage" "/DOUTFILE=$exe" "/DREMOVEFILES=$remove" "/DICONFILE=$iconFile" (Join-Path $root 'installer.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'NSIS build failed' }

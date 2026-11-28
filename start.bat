@@ -41,7 +41,7 @@ choice /C YN /M "Open the official Node.js download page"
 if not errorlevel 2 start "" "https://nodejs.org/en/download"
 exit /b 1
 :packaged_error
-echo Installed runtime failed. Reinstall VoiceInvoker-Setup-1.1.1.exe. System Node.js is not needed.
+echo Installed runtime failed. Reinstall the current VoiceInvoker-Installer EXE. System Node.js is not needed.
 if not defined VI_LIFECYCLE_DIR powershell.exe -NoProfile -NonInteractive -Command "$w=New-Object -ComObject WScript.Shell; $null=$w.Popup('The bundled runtime failed. Reinstall Voice Invoker from the official release. System Node.js is not required.',30,'Voice Invoker',16)"
 exit /b 1
 :error
