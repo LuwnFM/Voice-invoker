@@ -66,11 +66,13 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             voice_invoker_native::gsi_server::monitor(&cfg,seconds)?;
         },
         #[cfg(windows)]
+        Some("launch") if args.iter().skip(1).all(|s|s=="--live"||s=="--dota")=>voice_invoker_native::launcher::launch(args.iter().any(|s|s=="--live"),args.iter().any(|s|s=="--dota"))?,
+        #[cfg(windows)]
         Some("session") if (4..=6).contains(&args.len())=>{
             let config=Config::load(Path::new(&args[3]))?;
             let live=args.iter().skip(4).any(|s|s=="--live");
             let seconds=args.iter().skip(4).find(|s|s.as_str()!="--live").map(|s|s.parse()).transpose()?.unwrap_or(300);
-            voice_invoker_native::desktop::run(Path::new(&args[1]),Path::new(&args[2]),config,Path::new(&args[3]),live,seconds)?;
+            voice_invoker_native::desktop::run(Path::new(&args[1]),Path::new(&args[2]),config,Path::new(&args[3]),live,seconds,false)?;
         },
         #[cfg(windows)]
         Some("hook-smoke") if args.len()==1=>voice_invoker_native::win_input::smoke()?,

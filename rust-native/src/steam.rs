@@ -80,6 +80,31 @@ pub fn inspect(steam: &Path, active: Option<u64>) -> SteamInspection {
     let issue = if bindings.is_none() { Some("bindings-unreadable") } else { None };
     SteamInspection { launch_flag, binding_file: Some(file), bindings, issue }
 }
+#[cfg(windows)]
+pub fn automatic_steam()->Option<(PathBuf,Option<u64>)>{
+    use winreg::{enums::{HKEY_CURRENT_USER,HKEY_LOCAL_MACHINE},RegKey};
+    let hkcu=RegKey::predef(HKEY_CURRENT_USER);let hklm=RegKey::predef(HKEY_LOCAL_MACHINE);
+    let user=hkcu.open_subkey("Software\\Valve\\Steam").ok();
+    let path=user.as_ref().and_then(|k|k.get_value::<String,_>("SteamPath").ok())
+        .or_else(||hklm.open_subkey("SOFTWARE\\WOW6432Node\\Valve\\Steam").ok().and_then(|k|k.get_value::<String,_>("InstallPath").ok()))
+        .map(PathBuf::from).or_else(||std::env::var_os("ProgramFiles(x86)").map(|p|PathBuf::from(p).join("Steam")))?;
+    if !path.join("steam.exe").is_file(){return None;}
+    let active=user.and_then(|k|k.open_subkey("ActiveProcess").ok()).and_then(|k|k.get_value::<u32,_>("ActiveUser").ok()).map(u64::from).filter(|v|*v!=0);
+    Some((path,active))
+}
+
+#[cfg(windows)]
+pub fn diagnostic(c:&crate::config::Config)->serde_json::Value{
+    use serde_json::json;
+    let Some((steam,id))=automatic_steam()else{return json!({"dotaFound":false,"bindingsIssue":"steam-not-found"});};
+    let status=inspect(&steam,id);
+    let dota=discover_dota(&steam,None);
+    let gsi=dota.as_ref().map(|p|p.join("game/dota/cfg/gamestate_integration/gamestate_integration_voice_invoke.cfg"));
+    let raw=gsi.as_ref().and_then(|p|fs::read_to_string(p).ok());
+    let matches=raw.as_ref().is_some_and(|v|v.contains(&format!("127.0.0.1:{}/gsi",c.port))&&v.contains(&format!("\"{}\"",c.auth_token)));
+    let binding_matches=status.bindings.as_ref().map(|b|b.warnings.is_empty()&&["quas","wex","exort","invoke","slot1","slot2","voice"].iter().all(|k|b.keys.contains_key(*k))&&b.keys.iter().all(|(k,v)|if k=="voice"{&c.voice_chat_key==v}else{c.keys.get(k)==Some(v)})&&b.modes.iter().all(|(k,v)|c.slot_cast_modes.get(k).copied().unwrap_or(if crate::catalog::ITEM_KEYS.contains(&k.as_str()){crate::config::Mode::Quickcast}else{c.cast_mode})==*v));
+    json!({"dotaFound":dota.is_some(),"gsiInstalled":raw.is_some(),"gsiConfigMatches":matches,"itemsConfigured":raw.as_ref().is_some_and(|v|v.split_whitespace().collect::<Vec<_>>().windows(2).any(|w|w==["\"items\"","\"1\""])),"savedLaunchFlag":status.launch_flag,"bindingsIssue":status.issue,"bindingMatches":binding_matches,"bindingWarningsCount":status.bindings.as_ref().map(|b|b.warnings.len()).unwrap_or(0),"local":{"gsiPath":gsi,"bindingWarnings":status.bindings.as_ref().map(|b|&b.warnings)}})
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,15 +145,3 @@ mod tests {
     }
 }
 
-#[cfg(windows)]
-pub fn automatic_steam()->Option<(PathBuf,Option<u64>)>{
-    use winreg::{enums::{HKEY_CURRENT_USER,HKEY_LOCAL_MACHINE},RegKey};
-    let hkcu=RegKey::predef(HKEY_CURRENT_USER);let hklm=RegKey::predef(HKEY_LOCAL_MACHINE);
-    let user=hkcu.open_subkey("Software\\Valve\\Steam").ok();
-    let path=user.as_ref().and_then(|k|k.get_value::<String,_>("SteamPath").ok())
-        .or_else(||hklm.open_subkey("SOFTWARE\\WOW6432Node\\Valve\\Steam").ok().and_then(|k|k.get_value::<String,_>("InstallPath").ok()))
-        .map(PathBuf::from).or_else(||std::env::var_os("ProgramFiles(x86)").map(|p|PathBuf::from(p).join("Steam")))?;
-    if !path.join("steam.exe").is_file(){return None;}
-    let active=user.and_then(|k|k.open_subkey("ActiveProcess").ok()).and_then(|k|k.get_value::<u32,_>("ActiveUser").ok()).map(u64::from).filter(|v|*v!=0);
-    Some((path,active))
-}

@@ -6,6 +6,8 @@ pub mod capture;
 pub mod win_execute;
 #[cfg(windows)]
 pub mod desktop;
+#[cfg(windows)]
+pub mod launcher;
 pub mod parity;
 pub mod bindings;
 pub mod binding_watch;

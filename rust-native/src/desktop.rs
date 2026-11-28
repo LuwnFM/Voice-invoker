@@ -1,7 +1,7 @@
 //! Experimental unified Windows session. Dry run by default; live mode explicit.
 use crate::{catalog,config::Config,capture::Capture,gsi_server::Server,recognition::Parser,model,vosk::Vosk,runtime::Runtime,win_input::{Hook,focused},win_execute::Execution,input::Event};
 use std::{path::Path,sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
-pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:bool,seconds:u64)->Result<(),Box<dyn std::error::Error>>{
+pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:bool,seconds:u64,verified:bool)->Result<(),Box<dyn std::error::Error>>{
     if !(1..=86400).contains(&seconds){return Err("Session seconds must be 1..86400".into());}
     let live=live&&!config.test_only;
     let words=model::read_words(model_path)?;
@@ -14,7 +14,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     let mut vosk=Vosk::new(dll,model_path,capture.rate,&parser.grammar())?;
     let mut ui_state=None;
     let native_store=crate::storage::native_directory().ok().and_then(|dir|crate::storage::Store::open(&dir).ok()).filter(|store|store.path().canonicalize().ok().zip(config_path.canonicalize().ok()).is_some_and(|(a,b)|a==b));
-    let server=Server::start_with_ui(&config,|gsi|{let ui=crate::ui::Ui::new(&config,native_store.clone(),words,crate::capture::devices(),false,gsi);ui_state=Some(ui.clone());crate::ui::router(ui)})?;
+    let server=Server::start_with_ui(&config,|gsi|{let ui=crate::ui::Ui::new(&config,native_store.clone(),words,crate::capture::devices(),verified,gsi);ui_state=Some(ui.clone());crate::ui::router(ui)})?;
     let ui=ui_state.ok_or("UI startup failed")?;
     let arm=Arc::new(AtomicBool::new(false));
     let hook=Hook::start_session(config.clone(),live,arm.clone())?;
@@ -23,6 +23,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     let mut runtime=Runtime::new(config.clone(),parser,capture.rate);
     let mut active:Option<Execution>=None;let mut last_packet=None;
     let watcher=crate::steam::automatic_steam().and_then(|(path,id)|crate::steam::inspect(&path,id).binding_file).and_then(|path|crate::binding_watch::BindingWatch::new(&path).ok());
+    ui.set_discovery(crate::steam::diagnostic(&config));
     let mut refresh_at=watcher.as_ref().map(|_|0u64);let mut pending=None;
     let mut require_release=false;
     let mut allowed_before=false;let start=Instant::now();let mut last_meter=0u64;let mut profile=config.timing_profile;let mut restart=false;
@@ -39,8 +40,8 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
             Event::Toggle=>{require_release=true;},
             Event::Profile(next)=>{profile=next;runtime.profile(next);},
             Event::Listen(_)=>{},
-            Event::Settings=>{let _=std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{}/settings",server.address.port())).spawn();},
-            Event::Blocked=>{},
+            Event::Settings=>{ui.set_discovery(crate::steam::diagnostic(&config));let _=std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{}/settings",server.address.port())).spawn();},
+            Event::Blocked=>{ui.notice("blocked",None,None);},
         }}
         if quit||ui.restart_requested(){restart=!quit;break;}
         if let Some((at,p))=server.state.snapshot(){
@@ -65,7 +66,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
             println!("Bindings updated without restart");
         }}
         let (enabled,ptt,chat)=hook.snapshot();runtime.enabled(enabled,now);
-        let game=if live{crate::win_input::dota_focused(&config.window_title)}else{focused(&config.window_title)};
+        let game=focused(&config.window_title);
         let allowed=enabled&&!chat&&(game||(!live&&always));
         arm.store(live&&allowed&&pending.is_none()&&refresh_at.is_none(),Ordering::Release);
         if !ptt{require_release=false;}
@@ -100,7 +101,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
                 active=Some(Execution::new(d,now,live));
             }
         }
-        ui.update(allowed,enabled,runtime.listening(),profile);
+        ui.update(true,enabled,runtime.listening(),profile);
         for notice in runtime.notices(){if let crate::engine::Notice::Refused(reason)=&notice{ui.notice("refuse",None,Some(reason));}println!("{notice:?}");}
         std::thread::sleep(Duration::from_millis(2));
     }

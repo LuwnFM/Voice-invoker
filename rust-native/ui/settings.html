@@ -151,6 +151,7 @@
 <datalist id="knownItems"></datalist><div id="itemCastModes" class="panel"></div><div class="actions"><button id="addItemMode">Добавить предмет</button></div>
 <h2>Дополнительно</h2>
 <div class="opts"><label><input id="experimentalFrames" type="checkbox"> Экспериментально: frames-per-chunk=3 (выключено по умолчанию)</label>
+<label>Частота захвата <select id="audioRate" class="control"><option value="0">Авто</option><option value="16000">16000 Гц</option><option value="48000">48000 Гц</option></select></label><label>Размер блока <select id="audioBlock" class="control"><option>256</option><option>512</option><option>1024</option><option>2048</option></select></label>
 <label><input id="testOnly" type="checkbox"> Тест распознавания без нажатий (после перезапуска)</label></div>
 <p class="hint">Тест слушает микрофон постоянно, показывает совпадения в диагностике, не применяет способности и не блокирует клавиши. Чтобы вернуться к игре, отключи тест и перезапусти.</p>
 <footer>
@@ -427,6 +428,7 @@
       bindingGeneration:loadedBindingGeneration,autoSyncBindings:$('#autoSyncBindings').checked,syncQuickcast:$('#syncQuickcast').checked,bindingNotifications:$('#bindingNotifications').checked,
       disabledPhrases: selectedExclusions(),
       customSpellPhrases: Object.fromEntries(Object.entries(spellNames).map(([suffix])=>{const id='invoker_'+suffix;return [id,[.../** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#phrases input[data-custom="1"][data-spell="'+id+'"]'))].map(b=>b.dataset.phrase)];})),
+      audioRate:Number($('#audioRate').value),audioBlock:Number($('#audioBlock').value),
       experimentalFrames: $('#experimentalFrames').checked,
       testOnly: $('#testOnly').checked,
       slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value,...Object.fromEntries([.../** @type {NodeListOf<HTMLSelectElement>} */ (document.querySelectorAll('[data-item-mode]'))].map(e=>[e.dataset.itemMode,e.value]))},
@@ -474,7 +476,7 @@
     pick('listen', c.listen);
     for (const n of c.blockKeys) pick('block', n);
     buildPhrases(c);
-    $('#experimentalFrames').checked=c.experimentalFrames;
+    $('#experimentalFrames').checked=c.experimentalFrames;$('#audioRate').value=String(c.audioRate||0);$('#audioBlock').value=String(c.audioBlock||512);
     $('#testOnly').checked=c.testOnly;
     $('#slot1Mode').value=c.slotCastModes?.slot1||'';
     $('#slot2Mode').value=c.slotCastModes?.slot2||'';
