@@ -64,6 +64,7 @@ impl InputState{
     pub fn update_bindings(&mut self,c:&Config){
         let replacement=Self::new(c);self.talk=replacement.talk;self.always=replacement.always;self.blocked=replacement.blocked;self.listening=self.always;
     }
+    pub fn toggle(&mut self){self.enabled=!self.enabled;self.chat=false;if !self.always{self.listening=false;}}
     pub fn handle(&mut self,vk:u16,down:bool,game:bool)->(bool,Option<Event>){
         if !down{
             self.down.remove(&vk);
@@ -77,7 +78,7 @@ impl InputState{
         if ctrl&&shift&&(0x76..=0x7b).contains(&vk){
             self.swallowed.insert(vk);
             if repeat{return(true,None);}
-            let ev=match vk{0x76=>{self.enabled=!self.enabled;self.chat=false;if !self.always{self.listening=false;}Event::Toggle},0x77=>Event::Quit,0x78=>Event::Settings,_=>{self.profile=match vk{0x79=>Profile::Normal,0x7a=>Profile::Fast,_=>Profile::Turbo};self.enabled=true;Event::Profile(self.profile)}};
+            let ev=match vk{0x76=>{self.toggle();Event::Toggle},0x77=>Event::Quit,0x78=>Event::Settings,_=>{self.profile=match vk{0x79=>Profile::Normal,0x7a=>Profile::Fast,_=>Profile::Turbo};self.enabled=true;Event::Profile(self.profile)}};
             return (true,Some(ev));
         }
         if repeat&&self.swallowed.contains(&vk){return(true,None);}

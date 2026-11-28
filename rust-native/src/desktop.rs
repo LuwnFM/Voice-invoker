@@ -16,6 +16,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     let native_store=crate::storage::native_directory().ok().and_then(|dir|crate::storage::Store::open(&dir).ok()).filter(|store|store.path().canonicalize().ok().zip(config_path.canonicalize().ok()).is_some_and(|(a,b)|a==b));
     let server=Server::start_with_ui(&config,|gsi|{let ui=crate::ui::Ui::new(&config,native_store.clone(),words,crate::capture::devices(),verified,gsi);ui_state=Some(ui.clone());crate::ui::router(ui)})?;
     let ui=ui_state.ok_or("UI startup failed")?;
+    let shell=crate::shell::Shell::start(ui.clone(),config.window_title.clone(),true,true)?;
     let arm=Arc::new(AtomicBool::new(false));
     let hook=Hook::start_session(config.clone(),live,arm.clone())?;
     let mut always=config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
@@ -34,7 +35,13 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
         if capture.failure.load(Ordering::Acquire)||hook.overflow.load(Ordering::Acquire)||!hook.running()||!server.running(){
             arm.store(false,Ordering::Release);runtime.ready(false,now);return Err("Capture, hook or GSI worker failed".into());
         }
-        let mut quit=false;
+        let mut quit=false;let mut shell_restart=false;
+        while let Ok(event)=shell.events.try_recv(){match event{
+            crate::shell::ShellEvent::Quit=>quit=true,
+            crate::shell::ShellEvent::Restart=>shell_restart=true,
+            crate::shell::ShellEvent::Toggle=>hook.toggle()?,
+            crate::shell::ShellEvent::Settings=>{ui.set_discovery(crate::steam::diagnostic(&config));let _=std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{}/settings",server.address.port())).spawn();},
+        }}
         while let Ok(event)=hook.events.try_recv(){match event{
             Event::Quit=>quit=true,
             Event::Toggle=>{require_release=true;},
@@ -43,7 +50,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
             Event::Settings=>{ui.set_discovery(crate::steam::diagnostic(&config));let _=std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{}/settings",server.address.port())).spawn();},
             Event::Blocked=>{ui.notice("blocked",None,None);},
         }}
-        if quit||ui.restart_requested(){restart=!quit;break;}
+        if quit||shell_restart||ui.restart_requested(){restart=!quit;break;}
         if let Some((at,p))=server.state.snapshot(){
             if last_packet!=Some(at){last_packet=Some(at);let received=now.saturating_sub(at.elapsed().as_millis() as u64);runtime.gsi(received,p);}
         }
@@ -105,6 +112,6 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
         for notice in runtime.notices(){if let crate::engine::Notice::Refused(reason)=&notice{ui.notice("refuse",None,Some(reason));}println!("{notice:?}");}
         std::thread::sleep(Duration::from_millis(2));
     }
-    arm.store(false,Ordering::Release);drop(active);runtime.ready(false,start.elapsed().as_millis() as u64);hook.stop()?;drop(server);drop(capture);
+    arm.store(false,Ordering::Release);drop(active);runtime.ready(false,start.elapsed().as_millis() as u64);hook.stop()?;shell.stop()?;drop(server);drop(capture);
     if restart{std::thread::sleep(Duration::from_millis(150));std::process::Command::new(std::env::current_exe()?).args(std::env::args_os().skip(1)).spawn()?;}Ok(())
 }

@@ -14,6 +14,7 @@ use windows_sys::Win32::{
 };
 pub(crate) const OWN_TAG:usize=0x564f4943;
 const UPDATE:u32=WM_APP+44;
+const TOGGLE:u32=WM_APP+45;
 type BindingRequest=(Config,SyncSender<()>);
 struct Context {state:InputState,config:Config,events:SyncSender<Event>,overflow:Arc<AtomicBool>,snapshot:Arc<AtomicU32>,arm:Arc<AtomicBool>,live:bool,suppressed:BTreeSet<u16>}
 impl Context{fn publish(&self){self.snapshot.store(u32::from(self.state.enabled)|u32::from(self.state.listening)<<1|u32::from(self.state.chat)<<2,Ordering::Release);}}
@@ -123,6 +124,7 @@ impl Hook {
                     let n=GetMessageW(&mut msg,null_mut(),0,0);
                     if n==0{break;}
                     if n<0{return Err(io::Error::last_os_error());}
+                    if msg.message==TOGGLE{CONTEXT.with(|c|{if let Some(ctx)=c.borrow_mut().as_mut(){ctx.state.toggle();ctx.publish();if ctx.events.try_send(Event::Toggle).is_err(){ctx.overflow.store(true,Ordering::Release);}}});}
                     if msg.message==UPDATE{if let Ok((config,ack))=requests.try_recv(){CONTEXT.with(|c|{if let Some(ctx)=c.borrow_mut().as_mut(){ctx.state.update_bindings(&config);ctx.config=config;ctx.publish();}});let _=ack.send(());}}
                 }
             }
@@ -139,6 +141,7 @@ impl Hook {
         }
         Ok(())
     }
+    pub fn toggle(&self)->io::Result<()>{if unsafe{PostThreadMessageW(self.tid,TOGGLE,0,0)}==0{Err(io::Error::last_os_error())}else{Ok(())}}
     pub fn snapshot(&self)->(bool,bool,bool){let n=self.snapshot.load(Ordering::Acquire);(n&1!=0,n&2!=0,n&4!=0)}
     pub fn update(&self,config:Config)->io::Result<()>{
         let (ack,rx)=sync_channel(1);self.updates.try_send((config,ack)).map_err(|e|io::Error::other(e.to_string()))?;

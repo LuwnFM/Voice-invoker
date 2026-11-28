@@ -9,7 +9,7 @@ use tokio_stream::{StreamExt,wrappers::BroadcastStream};
 struct Data{
     config:Config,saved:Config,store:Option<Store>,words:BTreeSet<String>,devices:Vec<String>,
     generation:u64,binding_busy:bool,dirty:bool,restart:bool,ready:bool,enabled:bool,listening:bool,profile:Profile,
-    level:f64,transcript:String,last_test:Value,model_verified:bool,watching:bool,diagnostic:Value,
+    level:f64,transcript:String,last_test:Value,model_verified:bool,watching:bool,diagnostic:Value,notice:Option<(std::time::Instant,String)>,
 }
 #[derive(Clone)]
 pub struct Ui{data:Arc<Mutex<Data>>,gsi:GsiState,events:broadcast::Sender<Value>}
@@ -18,7 +18,7 @@ fn state(d:&Data)->Value{json!({"enabled":d.enabled,"voiceReady":d.ready,"listen
 impl Ui{
     pub fn new(c:&Config,store:Option<Store>,words:BTreeSet<String>,devices:Vec<String>,model_verified:bool,gsi:GsiState)->Self{
         let (events,_)=broadcast::channel(128);
-        Self{data:Arc::new(Mutex::new(Data{config:c.clone(),saved:c.clone(),store,words,devices,generation:0,binding_busy:false,dirty:false,restart:false,ready:false,enabled:true,listening:false,profile:c.timing_profile,level:0.0,transcript:String::new(),last_test:Value::Null,model_verified,watching:false,diagnostic:Value::Null})),gsi,events}
+        Self{data:Arc::new(Mutex::new(Data{config:c.clone(),saved:c.clone(),store,words,devices,generation:0,binding_busy:false,dirty:false,restart:false,ready:false,enabled:true,listening:false,profile:c.timing_profile,level:0.0,transcript:String::new(),last_test:Value::Null,model_verified,watching:false,diagnostic:Value::Null,notice:None})),gsi,events}
     }
     pub fn snapshot(&self)->Value{
         let d=self.data.lock().unwrap_or_else(|e|e.into_inner());json!({"state":state(&d),"event":null,"level":d.level,"transcript":d.transcript})
@@ -40,8 +40,13 @@ impl Ui{
         let _=self.events.send(json!({"state":state(&d),"event":null,"level":d.level,"transcript":d.transcript}));
     }
     pub fn notice(&self,event:&str,spell:Option<Value>,reason:Option<&str>){
-        let d=self.data.lock().unwrap_or_else(|e|e.into_inner());let _=self.events.send(json!({"state":state(&d),"event":event,"spell":spell,"reason":reason}));
+        let mut d=self.data.lock().unwrap_or_else(|e|e.into_inner());
+        let name=spell.as_ref().and_then(|v|v.get("name")).and_then(Value::as_str).unwrap_or("");
+        let text=match event{"cast"|"preview"|"item"=>name.to_owned(),"prepared"=>format!("Подготовлено: {name}"),"refuse"=>reason.unwrap_or("Каст отклонён").to_owned(),"blocked"=>"Только голосом!".into(),_=>String::new()};
+        if !text.is_empty(){d.notice=Some((std::time::Instant::now(),text));}
+        let _=self.events.send(json!({"state":state(&d),"event":event,"spell":spell,"reason":reason}));
     }
+    pub fn overlay(&self)->(bool,bool,String,f64,Option<String>){let d=self.data.lock().unwrap_or_else(|e|e.into_inner());let notice=d.notice.as_ref().filter(|(at,_)|at.elapsed()<Duration::from_millis(1800)).map(|(_,text)|text.clone());(d.enabled,d.listening&&d.config.listen!="always",d.transcript.clone(),d.level,notice)}
     pub fn binding_status(&self,busy:bool,watching:bool){let mut d=self.data.lock().unwrap_or_else(|e|e.into_inner());d.binding_busy=busy;d.watching=watching;}
     pub fn can_sync(&self)->bool{!self.data.lock().unwrap_or_else(|e|e.into_inner()).dirty}
     pub fn bindings(&self,c:&Config)->Result<(),Box<dyn std::error::Error>>{

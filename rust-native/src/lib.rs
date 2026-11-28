@@ -8,6 +8,8 @@ pub mod win_execute;
 pub mod desktop;
 #[cfg(windows)]
 pub mod launcher;
+#[cfg(windows)]
+pub mod shell;
 pub mod parity;
 pub mod bindings;
 pub mod binding_watch;

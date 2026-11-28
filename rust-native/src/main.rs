@@ -75,6 +75,8 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             voice_invoker_native::desktop::run(Path::new(&args[1]),Path::new(&args[2]),config,Path::new(&args[3]),live,seconds,false)?;
         },
         #[cfg(windows)]
+        Some("shell-smoke") if args.len()==1=>voice_invoker_native::shell::smoke()?,
+        #[cfg(windows)]
         Some("hook-smoke") if args.len()==1=>voice_invoker_native::win_input::smoke()?,
         #[cfg(windows)]
         Some("microphone") if (3..=7).contains(&args.len())=>microphone(&args)?,

@@ -28,3 +28,5 @@ Live hook integration: suppression of configured keys and matched hotkeys is arm
 Explicit native GSI install/restore uses a separate recovery record, preserves externally modified files, and does not claim ownership of identical legacy GSI. Real input requires a focused process named dota2.exe as well as the configured title. Binding persistence is restricted to the exact native configuration file; legacy/explicit external configs remain read-only.
 
 Settings and OBS HTTP/SSE adapters added using the original HTML/CSS and native audio state. Native settings save/restart, dictionary search, report, GSI repair and bindings import wired. Browser is temporary settings host; native game overlay/tray still pending. No browser-side capture or WASM runtime.
+
+Native Win32 tray and overlay adapter implemented, with lifecycle smoke test. Settings currently open in default browser; native WebView2 settings window remains a possible separate host. The game overlay is now native rather than a Chromium renderer; exact visual parity and multi-monitor behavior are not yet verified.
