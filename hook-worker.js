@@ -156,7 +156,7 @@ function finishSequence(ok, reason = '') {
   const done = request;
   seq = null;
   request = null;
-  if (done) parentPort.postMessage({ type: 'cast-complete', id: done.id, ok, reason, profile: done.profile, clicked, elapsedMs: Number(process.hrtime.bigint() - done.started) / 1e6 });
+  if (done) parentPort.postMessage({ type: 'cast-complete', id: done.id, ok, reason, profile: done.profile, clicked, selectionRisk:clickGuard.interrupted, elapsedMs: Number(process.hrtime.bigint() - done.started) / 1e6 });
 }
 
 function runSequence() {

@@ -305,13 +305,16 @@ function selectionStatus(now){
 }
 function ensureSelection(entry,profile,resume){
   const now=Date.now(),selected=selectionStatus(now);
+  const freshHero=gsi&&now-gsi.at<5000&&gsi.hero;
+  const wrongHero=freshHero&&freshHero!=='npc_dota_hero_invoker';
   clearTimeout(selectionTimer);selectionTimer=null;
   const delay=ms=>{selectionTimer=setTimeout(resume,ms);return {wait:true};};
   if(selected===true&&(lastClickAt===null||gsi.at>lastClickAt)){lastClickAt=null;}
   if(entry.selectionAt!==undefined){
     if(now<busyUntil)return delay(busyUntil-now);
     if(selected===true&&gsi.at>entry.selectionAt){lastClickAt=null;return {};}
-    if(selected===false||entry.confirmSelection){
+    if(entry.confirmHero&&freshHero==='npc_dota_hero_invoker'&&gsi.alive===true&&selected!==false&&gsi.at>entry.selectionAt){lastClickAt=null;return {};}
+    if(selected===false||entry.confirmSelection||entry.confirmHero||wrongHero){
       if(now<entry.selectionAt+1000)return delay(50);
       return {refuse:'Инвокер не выбран после восстановления; выбери героя вручную'};
     }
@@ -325,7 +328,7 @@ function ensureSelection(entry,profile,resume){
   }
   // Avoid double-tapping the selection key (which can center the camera).
   if(lastSelectAt!==null&&now-lastSelectAt<450)return delay(450-(now-lastSelectAt));
-  entry.selectionAt=now;entry.confirmSelection=selected===false;
+  entry.selectionAt=now;entry.confirmSelection=selected===false;entry.confirmHero=!!wrongHero;
   if(!dispatchCast(entry.spell,SELECT_HERO_ACTION,profile))return {refuse:'Не удалось восстановить выбор Инвокера'};
   lastSelectAt=now;
   return {wait:true};
@@ -360,7 +363,7 @@ function dispatchCast(spell, action, profile) {
 function handleCastComplete(m) {
   if (!activeCast || m.id !== activeCast.id) return;
   lastCastStatus=m.ok?'sent':'failed';
-  if(m.clicked===true)lastClickAt=Date.now();
+  if(m.clicked===true||m.selectionRisk===true)lastClickAt=Date.now();
   const finished = activeCast;
   clearTimeout(finished.watchdog);
   activeCast = null;
