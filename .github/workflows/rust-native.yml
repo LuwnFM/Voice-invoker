@@ -1,0 +1,40 @@
+name: Rust native checks
+on:
+  push:
+    branches: [rust-native-2.0]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-native-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: rust-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all
+      - run: cargo test --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Windows'
+        with:
+          name: rust-native-build
+          path: |
+            rust-native/Cargo.lock
+            rust-native/target/release/voice-invoker-native.exe
+            rust-native/src/
+            rust-native/tests/
+          if-no-files-found: warn

@@ -11,3 +11,6 @@ log.previous.txt
 .quality-tools/
 .quality-html/
 typecheck-report.txt
+
+/rust-native/target/
+/rust-native/model-extracted/
