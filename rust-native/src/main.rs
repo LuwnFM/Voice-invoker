@@ -9,7 +9,8 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
         Some("verify-model") if args.len()==2=>{model::verify(Path::new(&args[1]))?;println!("V2 SHA-256 OK");},
         Some("extract-model") if args.len()==3||args.len()==4&&args[3]=="--frames-per-chunk=3"=>{
             let path=model::extract_with_options(Path::new(&args[1]),Path::new(&args[2]),args.len()==4)?;println!("{}",path.display());
-        },,
+        },
+        Some("parity-jsonl") if args.len()==1=>voice_invoker_native::parity::run()?,
         Some("parse") if args.len()>=2=>{
             let cat=catalog::resolve(&Config::default(),None);let parser=Parser::new(&cat);
             for c in parser.parse(&args[1..].join(" ")){println!("{c:?}");}

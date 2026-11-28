@@ -28,6 +28,11 @@ jobs:
       - run: cargo test --all-targets
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Differential replay against 1.1.1
+        run: node scripts/parity.cjs
       - name: Native Windows hook lifecycle (observe only)
         if: runner.os == 'Windows'
         run: .\target\release\voice-invoker-native.exe hook-smoke

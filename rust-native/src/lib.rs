@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod parity;
 pub mod bindings;
 pub mod binding_watch;
 pub mod catalog;
