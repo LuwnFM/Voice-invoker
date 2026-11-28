@@ -1,7 +1,7 @@
 //! Native input adapter with focus checks, acknowledgement and release on cancellation.
 use crate::{engine::Dispatch,input::Step,win_input::{focused,OWN_TAG}};
 use std::{collections::BTreeSet,io,mem::size_of};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput,INPUT,INPUT_0,INPUT_KEYBOARD,INPUT_MOUSE,KEYBDINPUT,MOUSEINPUT,KEYEVENTF_KEYUP,KEYEVENTF_EXTENDEDKEY,MOUSEEVENTF_LEFTDOWN,MOUSEEVENTF_LEFTUP,MOUSEEVENTF_MIDDLEDOWN,MOUSEEVENTF_MIDDLEUP,MOUSEEVENTF_XDOWN,MOUSEEVENTF_XUP};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput,INPUT,INPUT_0,INPUT_KEYBOARD,INPUT_MOUSE,KEYBDINPUT,MOUSEINPUT,KEYEVENTF_KEYUP,KEYEVENTF_EXTENDEDKEY,KEYEVENTF_SCANCODE,MapVirtualKeyW,MAPVK_VK_TO_VSC,MOUSEEVENTF_LEFTDOWN,MOUSEEVENTF_LEFTUP,MOUSEEVENTF_MIDDLEDOWN,MOUSEEVENTF_MIDDLEUP,MOUSEEVENTF_XDOWN,MOUSEEVENTF_XUP};
 
 fn event(vk:u16,down:bool)->INPUT{
     let mouse=match vk{
@@ -14,8 +14,9 @@ fn event(vk:u16,down:bool)->INPUT{
         INPUT{r#type:INPUT_MOUSE,Anonymous:INPUT_0{mi:MOUSEINPUT{dx:0,dy:0,mouseData:data,dwFlags:flags,time:0,dwExtraInfo:OWN_TAG}}}
     }else{
         let extended=matches!(vk,0x21..=0x28|0x2d|0x2e|0x6f|0xa3|0xa5);
-        let flags=if down{0}else{KEYEVENTF_KEYUP}|if extended{KEYEVENTF_EXTENDEDKEY}else{0};
-        INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:vk,wScan:0,dwFlags:flags,time:0,dwExtraInfo:OWN_TAG}}}
+        let scan=unsafe{MapVirtualKeyW(u32::from(vk),MAPVK_VK_TO_VSC)} as u16;
+        let flags=(if down{0}else{KEYEVENTF_KEYUP})|(if extended{KEYEVENTF_EXTENDEDKEY}else{0})|(if scan!=0{KEYEVENTF_SCANCODE}else{0});
+        INPUT{r#type:INPUT_KEYBOARD,Anonymous:INPUT_0{ki:KEYBDINPUT{wVk:vk,wScan:scan,dwFlags:flags,time:0,dwExtraInfo:OWN_TAG}}}
     }
 }
 fn send(vk:u16,down:bool)->io::Result<()>{
@@ -42,13 +43,21 @@ impl Execution{
         if down{self.held.insert(vk);}else{self.held.remove(&vk);}
         Ok(())
     }
+    fn pair(&mut self,vk:u16)->io::Result<()>{
+        if !self.live{return Ok(());}
+        let input=[event(vk,true),event(vk,false)];
+        let n=unsafe{SendInput(2,input.as_ptr(),size_of::<INPUT>() as i32)};
+        if n==2{return Ok(());}
+        if n==1{self.held.insert(vk);}
+        Err(io::Error::last_os_error())
+    }
     pub fn tick(&mut self,now:u64,title:&str,allowed:bool)->Option<bool>{
         if !allowed||(self.live&&!focused(title)){return Some(false);}
         if now<self.deadline{return None;}
         while let Some(step)=self.dispatch.steps.get(self.index).copied(){
             let result=match step{
-                Step::Key(vk,_)=>self.set(vk,true).and_then(|_|self.set(vk,false)),
-                Step::Click(_)=>self.set(1,true).and_then(|_|self.set(1,false)),
+                Step::Key(vk,_)=>self.pair(vk),
+                Step::Click(_)=>self.pair(1),
                 Step::Down(vk,_)=>self.set(vk,true),
                 Step::Up(vk,_)=>self.set(vk,false),
             };

@@ -43,6 +43,12 @@ impl Runtime {
     pub fn listening(&self)->bool{self.listening}
     pub fn poll(&mut self,now:u64)->Option<Dispatch>{self.engine.poll(now)}
     pub fn ack(&mut self,id:u64,ok:bool,now:u64)->bool{self.engine.acknowledge(id,ok,now)}
+    pub fn idle(&self)->bool{self.engine.idle()}
+    pub fn discard_waiting(&mut self){self.engine.discard_waiting();}
+    pub fn replace_bindings(&mut self,config:&Config,now:u64)->bool{
+        if !self.engine.replace_bindings(config){return false;}
+        self.listening=false;self.preroll.clear();self.speech.reset(now);true
+    }
     pub fn notices(&mut self)->Vec<Notice>{self.engine.notices()}
 }
 #[cfg(test)]

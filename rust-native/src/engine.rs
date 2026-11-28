@@ -35,6 +35,12 @@ impl Engine {
     pub fn set_ready(&mut self,ready:bool){self.voice_ready=ready;if !ready{self.discard();}}
     pub fn set_enabled(&mut self,enabled:bool){self.enabled=enabled;if !enabled{self.discard();}}
     fn discard(&mut self){self.waiting.clear();self.awaiting=None;}
+    pub fn idle(&self)->bool{self.active.is_none()&&self.awaiting.is_none()&&self.waiting.is_empty()}
+    pub fn discard_waiting(&mut self){self.waiting.clear();}
+    pub fn replace_bindings(&mut self,config:&Config)->bool{
+        if !self.idle(){return false;}
+        self.config.keys=config.keys.clone();self.config.voice_chat_key=config.voice_chat_key.clone();self.config.slot_cast_modes=config.slot_cast_modes.clone();self.config.item_cast_modes=config.item_cast_modes.clone();true
+    }
     pub fn notices(&mut self)->Vec<Notice>{std::mem::take(&mut self.notices)}
     pub fn accept_gsi(&mut self,now:u64,packet:Packet)->bool{
         if !packet.authenticated(&self.config){return false;}

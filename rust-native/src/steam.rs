@@ -119,3 +119,16 @@ mod tests {
         assert_eq!(discover_dota(&steam, Some(&exe)), Some(dota));
     }
 }
+
+#[cfg(windows)]
+pub fn automatic_steam()->Option<(PathBuf,Option<u64>)>{
+    use winreg::{enums::{HKEY_CURRENT_USER,HKEY_LOCAL_MACHINE},RegKey};
+    let hkcu=RegKey::predef(HKEY_CURRENT_USER);let hklm=RegKey::predef(HKEY_LOCAL_MACHINE);
+    let user=hkcu.open_subkey("Software\\Valve\\Steam").ok();
+    let path=user.as_ref().and_then(|k|k.get_value::<String,_>("SteamPath").ok())
+        .or_else(||hklm.open_subkey("SOFTWARE\\WOW6432Node\\Valve\\Steam").ok().and_then(|k|k.get_value::<String,_>("InstallPath").ok()))
+        .map(PathBuf::from).or_else(||std::env::var_os("ProgramFiles(x86)").map(|p|PathBuf::from(p).join("Steam")))?;
+    if !path.join("steam.exe").is_file(){return None;}
+    let active=user.and_then(|k|k.open_subkey("ActiveProcess").ok()).and_then(|k|k.get_value::<u32,_>("ActiveUser").ok()).map(u64::from).filter(|v|*v!=0);
+    Some((path,active))
+}

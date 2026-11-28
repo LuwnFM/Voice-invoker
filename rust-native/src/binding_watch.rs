@@ -19,6 +19,11 @@ impl BindingWatch{
         let b=bindings::read(&text)?;
         Ok(bindings::apply(config,&b)?)
     }
+    pub fn poll_event(&self)->Result<bool,Box<dyn std::error::Error>>{
+        let mut changed=false;
+        while let Ok(event)=self.events.try_recv(){let event=event?;changed|=!event.kind.is_access()&&event.paths.iter().any(|p|same_file(p,&self.file));}
+        Ok(changed)
+    }
     /// Block only for the supplied interval. Coalesce bursts for at most 350 ms.
     pub fn changed(&self,timeout:Duration)->Result<bool,Box<dyn std::error::Error>>{
         let deadline=Instant::now()+timeout;
