@@ -6,5 +6,6 @@ pub mod input;
 pub mod model;
 pub mod recognition;
 pub mod gsi;
+pub mod engine;
 pub mod queue;
 pub mod vosk;
