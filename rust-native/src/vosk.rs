@@ -23,6 +23,9 @@ impl Vosk{
         let grammar=CString::new(serde_json::to_string(grammar)?)?;
         // SAFETY: explicit local library path, signatures taken from vosk_api.h.
         unsafe{
+            #[cfg(windows)]
+            let library=Library::from(libloading::os::windows::Library::load_with_flags(&dll,0x00000100|0x00001000)?);
+            #[cfg(not(windows))]
             let library=Library::new(dll)?;
             let create_model:ModelNew=*library.get(b"vosk_model_new\0")?;
             let free_model:ModelFree=*library.get(b"vosk_model_free\0")?;

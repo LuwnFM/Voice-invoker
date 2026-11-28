@@ -14,6 +14,9 @@ pub fn verify(path:&Path)->Result<(),Box<dyn std::error::Error>>{
     Ok(())
 }
 pub fn extract_verified(archive:&Path,destination:&Path)->Result<PathBuf,Box<dyn std::error::Error>>{
+    extract_with_options(archive,destination,false)
+}
+pub fn extract_with_options(archive:&Path,destination:&Path,experimental_frames:bool)->Result<PathBuf,Box<dyn std::error::Error>>{
     verify(archive)?;
     if destination.exists(){return Err("Extraction destination must not exist".into());}
     std::fs::create_dir(destination)?;
@@ -26,6 +29,11 @@ pub fn extract_verified(archive:&Path,destination:&Path)->Result<PathBuf,Box<dyn
         }
         let root=destination.join("vosk-model-small-ru-0.22");
         if !root.join("graph/Gr.fst").is_file()||!root.join("am/final.mdl").is_file(){return Err("Incomplete V2 model".into());}
+        if experimental_frames{
+            let conf=root.join("conf/model.conf");
+            let original=std::fs::read_to_string(&conf)?;
+            std::fs::write(&conf,frames_three(&original))?;
+        }
         Ok(root)
     })();
     if result.is_err(){let _=std::fs::remove_dir_all(destination);}
@@ -53,3 +61,22 @@ pub fn words_from_graph(graph:&[u8])->Result<BTreeSet<String>,String>{
     Ok(words)
 }
 pub fn read_words(model:&Path)->Result<BTreeSet<String>,Box<dyn std::error::Error>>{Ok(words_from_graph(&std::fs::read(model.join("graph/Gr.fst"))?)?)}
+
+/// Only called on a freshly extracted, disposable copy of verified V2.
+pub fn frames_three(text:&str)->String{
+    let mut result=text.lines().filter(|line|{
+        let trimmed=line.trim_start();
+        !(trimmed.starts_with("--frames-per-chunk=")||trimmed.strip_prefix("--frames-per-chunk").is_some_and(|s|s.starts_with(char::is_whitespace)))
+    }).collect::<Vec<_>>().join("\n");
+    result.push_str("\n--frames-per-chunk=3\n");result
+}
+#[cfg(test)]
+mod tests{
+    #[test]
+    fn experimental_frames_only_changes_the_copy_setting(){
+        let text="--beam=10\n --frames-per-chunk=20\n--max-active=5000\n";
+        let result=super::frames_three(text);
+        assert_eq!(result,"--beam=10\n--max-active=5000\n--frames-per-chunk=3\n");
+        assert!(text.contains("20"));
+    }
+}

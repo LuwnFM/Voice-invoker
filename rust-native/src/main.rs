@@ -7,7 +7,9 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
     let args:Vec<String>=std::env::args().skip(1).collect();
     match args.first().map(String::as_str){
         Some("verify-model") if args.len()==2=>{model::verify(Path::new(&args[1]))?;println!("V2 SHA-256 OK");},
-        Some("extract-model") if args.len()==3=>{let path=model::extract_verified(Path::new(&args[1]),Path::new(&args[2]))?;println!("{}",path.display());},
+        Some("extract-model") if args.len()==3||args.len()==4&&args[3]=="--frames-per-chunk=3"=>{
+            let path=model::extract_with_options(Path::new(&args[1]),Path::new(&args[2]),args.len()==4)?;println!("{}",path.display());
+        },,
         Some("parse") if args.len()>=2=>{
             let cat=catalog::resolve(&Config::default(),None);let parser=Parser::new(&cat);
             for c in parser.parse(&args[1..].join(" ")){println!("{c:?}");}
@@ -30,16 +32,20 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             if !tail.is_empty(){let (finalized,text)=engine.feed(&tail)?;print_result(&parser,&mut gate,&mut previous,finalized,&text);}
             let text=engine.finish()?;print_result(&parser,&mut gate,&mut previous,true,&text);
         },
+        Some("watch-binds") if (2..=3).contains(&args.len())=>{
+            let seconds=args.get(2).map(|s|s.parse()).transpose()?.unwrap_or(15);
+            voice_invoker_native::binding_watch::monitor(Path::new(&args[1]),seconds)?;
+        },
         Some("gsi-monitor") if (2..=3).contains(&args.len())=>{
-            let mut cfg=Config::default();cfg.port=args[1].parse()?;
+            let cfg=Config{port:args[1].parse()?,..Config::default()};
             let seconds=args.get(2).map(|s|s.parse()).transpose()?.unwrap_or(15);
             voice_invoker_native::gsi_server::monitor(&cfg,seconds)?;
         },
         #[cfg(windows)]
         Some("hook-smoke") if args.len()==1=>voice_invoker_native::win_input::smoke()?,
         #[cfg(windows)]
-        Some("microphone") if (3..=6).contains(&args.len())=>microphone(&args)?,
-        _=>{println!("Native prototype — NO keyboard or mouse injection.\nverify-model ARCHIVE\nextract-model ARCHIVE NEW_DIR\nparse TEXT\ngsi-monitor PORT [SECONDS=15]\nhook-smoke (Windows, observe only)\nrecognize-wav DLL MODEL_DIR WAV [BLOCK=512] [CONFIG]\nmicrophone DLL MODEL_DIR [SECONDS=15] [BLOCK=512] [DEVICE_NAME]");}
+        Some("microphone") if (3..=7).contains(&args.len())=>microphone(&args)?,
+        _=>{println!("Native prototype — NO keyboard or mouse injection.\nverify-model ARCHIVE\nextract-model ARCHIVE NEW_DIR\nparse TEXT\ngsi-monitor PORT [SECONDS=15]\nhook-smoke (Windows, observe only)\nrecognize-wav DLL MODEL_DIR WAV [BLOCK=512] [CONFIG]\nmicrophone DLL MODEL_DIR [SECONDS=15] [BLOCK=512] [DEVICE_NAME] [--rate=16000|48000|auto]");}
     }
     Ok(())
 }
@@ -53,9 +59,21 @@ fn microphone(args:&[String])->Result<(),Box<dyn std::error::Error>>{
     use cpal::traits::{DeviceTrait,HostTrait,StreamTrait};
     use cpal::SampleFormat;
     use std::{sync::mpsc::{sync_channel,TrySendError},time::{Duration,Instant},sync::{Arc,atomic::{AtomicBool,Ordering}}};
+    let rate_arg=args.iter().skip(3).find_map(|s|s.strip_prefix("--rate="));
+    let requested=match rate_arg{None|Some("auto")=>None,Some("16000")=>Some(16000),Some("48000")=>Some(48000),_=>return Err("Rate must be auto, 16000 or 48000".into())};
+    let args:Vec<_>=args.iter().filter(|s|!s.starts_with("--rate=")).cloned().collect();
     let host=cpal::default_host();
     let device=if let Some(name)=args.get(5){host.input_devices()?.find(|d|d.name().ok().as_ref()==Some(name)).ok_or("Input device not found")?}else{host.default_input_device().ok_or("No default input device")?};
-    let supported=device.default_input_config()?;let format=supported.sample_format();let config:cpal::StreamConfig=supported.into();
+    let default=device.default_input_config()?;
+    let supported=if let Some(rate)=requested{
+        let selected=device.supported_input_configs()?.filter(|r|r.min_sample_rate().0<=rate&&r.max_sample_rate().0>=rate&&matches!(r.sample_format(),SampleFormat::F32|SampleFormat::I16|SampleFormat::U16))
+            .min_by_key(|r|(r.sample_format()!=default.sample_format(),r.channels()!=default.channels()));
+        match selected{
+            Some(range)=>range.with_sample_rate(cpal::SampleRate(rate)),
+            None=>{eprintln!("Requested {rate} Hz unsupported by device; using default {} Hz",default.sample_rate().0);default}
+        }
+    }else{default};
+    let format=supported.sample_format();let config:cpal::StreamConfig=supported.into();
     let rate=config.sample_rate.0;let channels=usize::from(config.channels);
     if channels==0{return Err("Invalid channel count".into());}
     let seconds:u64=args.get(3).map(|s|s.parse()).transpose()?.unwrap_or(15);

@@ -14,3 +14,5 @@ typecheck-report.txt
 
 /rust-native/target/
 /rust-native/model-extracted/
+
+/rust-native/native-smoke/

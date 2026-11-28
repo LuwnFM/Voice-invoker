@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod bindings;
+pub mod binding_watch;
 pub mod catalog;
 pub mod config;
 pub mod input;
