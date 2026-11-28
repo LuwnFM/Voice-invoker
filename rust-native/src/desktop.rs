@@ -10,13 +10,15 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     let parser=Parser::new(&cat);
     let requested=config.other.get("audioRate").and_then(|v|v.as_u64()).and_then(|v|u32::try_from(v).ok()).filter(|v|matches!(v,16000|48000));
     let block=config.other.get("audioBlock").and_then(|v|v.as_u64()).and_then(|v|usize::try_from(v).ok()).unwrap_or(512);
-    let capture=Capture::open(Some(&config.microphone),requested,block)?;
-    let mut vosk=Vosk::new(dll,model_path,capture.rate,&parser.grammar())?;
+    let noise=config.other.get("noiseSuppression").and_then(|v|v.as_bool()).unwrap_or(false);
     let mut ui_state=None;
     let native_store=crate::storage::native_directory().ok().and_then(|dir|crate::storage::Store::open(&dir).ok()).filter(|store|store.path().canonicalize().ok().zip(config_path.canonicalize().ok()).is_some_and(|(a,b)|a==b));
     let server=Server::start_with_ui(&config,|gsi|{let ui=crate::ui::Ui::new(&config,native_store.clone(),words,crate::capture::devices(),verified,gsi);ui_state=Some(ui.clone());crate::ui::router(ui)})?;
-    let ui=ui_state.ok_or("UI startup failed")?;
+    let ui=ui_state.ok_or("UI startup failed")?;ui.set_dry_run(!live);
     let shell=crate::shell::Shell::start(ui.clone(),config.window_title.clone(),true,true)?;
+    let mut settings_child=crate::settings_window::SettingsChild::default();
+    let capture=match Capture::open(Some(&config.microphone),requested,block,noise){Ok(c)=>c,Err(e)=>return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string())};
+    let mut vosk=match Vosk::new(dll,model_path,capture.rate,&parser.grammar()){Ok(v)=>v,Err(e)=>return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string())};
     let arm=Arc::new(AtomicBool::new(false));
     let hook=Hook::start_session(config.clone(),live,arm.clone())?;
     let mut always=!live||config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
@@ -27,14 +29,15 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     ui.set_discovery(crate::steam::diagnostic(&config));ui.set_audio(capture.device_rate,capture.rate);
     let mut refresh_at=watcher.as_ref().map(|_|0u64);let mut pending=None;
     let mut require_release=false;
-    let mut settings_child=crate::settings_window::SettingsChild::default();
     let mut allowed_before=false;let start=Instant::now();let mut last_meter=0u64;let mut profile=config.timing_profile;let mut restart=false;
     println!("Native session: device {} Hz, recognizer {} Hz; GSI {}; input {}",capture.device_rate,capture.rate,server.address,if live{"LIVE"}else{"DRY RUN"});
-    capture.start()?;
+    if let Err(e)=capture.start(){arm.store(false,Ordering::Release);hook.stop()?;drop(capture);return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string());}
+    ui.set_hook_ready(true);
     while start.elapsed()<Duration::from_secs(seconds){
         let now=start.elapsed().as_millis() as u64;
-        if capture.failure.load(Ordering::Acquire)||hook.overflow.load(Ordering::Acquire)||!hook.running()||!server.running(){
-            arm.store(false,Ordering::Release);runtime.ready(false,now);return Err("Capture, hook or GSI worker failed".into());
+        if !server.running(){arm.store(false,Ordering::Release);runtime.ready(false,now);return Err("GSI worker failed".into());}
+        if capture.failure.load(Ordering::Acquire)||hook.overflow.load(Ordering::Acquire)||!hook.running(){
+            arm.store(false,Ordering::Release);drop(active.take());runtime.ready(false,now);let _=hook.stop();drop(capture);return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,"Микрофон или хук отключён. Проверь устройство и перезапусти приложение.");
         }
         let mut quit=false;let mut shell_restart=false;
         while let Ok(event)=shell.events.try_recv(){match event{
@@ -52,9 +55,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
             Event::Blocked=>{ui.notice("blocked",None,None);},
         }}
         if quit||shell_restart||ui.restart_requested(){restart=!quit;break;}
-        if let Some((at,p))=server.state.snapshot(){
-            if last_packet!=Some(at){last_packet=Some(at);let received=now.saturating_sub(at.elapsed().as_millis() as u64);runtime.gsi(received,p);}
-        }
+        if let Some((at,p))=server.state.snapshot_if_new(last_packet){last_packet=Some(at);let received=now.saturating_sub(at.elapsed().as_millis() as u64);runtime.gsi(received,p);}
         if let Some(w)=&watcher{
             if w.poll_event()?{refresh_at=Some(now.saturating_add(350));pending=None;runtime.discard_waiting();}
             if refresh_at.is_some_and(|at|now>=at){
@@ -111,8 +112,29 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
         }
         ui.update(true,enabled,runtime.listening(),profile);
         for notice in runtime.notices(){if let crate::engine::Notice::Refused(reason)=&notice{ui.notice("refuse",None,Some(reason));}println!("{notice:?}");}
-        std::thread::sleep(Duration::from_millis(2));
+        std::thread::sleep(Duration::from_millis(if active.is_some(){2}else if runtime.listening(){4}else{10}));
     }
     arm.store(false,Ordering::Release);drop(active);runtime.ready(false,start.elapsed().as_millis() as u64);hook.stop()?;shell.stop()?;drop(settings_child);drop(server);drop(capture);
     Ok(restart)
+}
+
+/// Keep the configuration and diagnostic window available when audio cannot start.
+/// No hook or executor is owned by this recovery path.
+fn recovery(config:&Config,ui:&crate::ui::Ui,shell:&crate::shell::Shell,settings:&mut crate::settings_window::SettingsChild,port:u16,seconds:u64,error:&str)->Result<bool,Box<dyn std::error::Error>>{
+    ui.set_discovery(crate::steam::diagnostic(config));ui.set_hook_ready(false);ui.set_voice_error(error);
+    ui.update(false,false,false,config.timing_profile);
+    eprintln!("Recovery: {error}");
+    settings.open(port)?;
+    let start=Instant::now();
+    while start.elapsed()<Duration::from_secs(seconds){
+        if ui.restart_requested(){return Ok(true);}
+        match shell.events.recv_timeout(Duration::from_millis(100)){
+            Ok(crate::shell::ShellEvent::Quit)=>return Ok(false),
+            Ok(crate::shell::ShellEvent::Restart)=>return Ok(true),
+            Ok(crate::shell::ShellEvent::Settings)=>settings.open(port)?,
+            Ok(crate::shell::ShellEvent::Toggle)|Err(std::sync::mpsc::RecvTimeoutError::Timeout)=>{},
+            Err(_)=>return Err("Diagnostic tray closed".into()),
+        }
+    }
+    Ok(false)
 }

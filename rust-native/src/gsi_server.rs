@@ -8,6 +8,7 @@ pub struct GsiState {token:Arc<str>, latest:Arc<Mutex<Option<(Instant,Packet)>>>
 impl GsiState{
     pub fn new(c:&Config)->Self{Self{token:Arc::from(c.auth_token.as_str()),latest:Arc::new(Mutex::new(None))}}
     pub fn snapshot(&self)->Option<(Instant,Packet)>{self.latest.lock().ok()?.clone()}
+    pub fn snapshot_if_new(&self,previous:Option<Instant>)->Option<(Instant,Packet)>{self.latest.lock().ok()?.as_ref().filter(|(at,_)|Some(*at)!=previous).cloned()}
 }
 async fn receive(State(state):State<GsiState>,headers:HeaderMap,Json(packet):Json<Packet>)->StatusCode{
     // GSI is a native game client. Browser cross-origin calls are not accepted.

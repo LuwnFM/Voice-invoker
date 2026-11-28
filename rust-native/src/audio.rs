@@ -60,3 +60,37 @@ mod rate_tests{
         assert_eq!(out,vec![600,-600]);
     }
 }
+
+/// Optional pure Rust RNNoise pipeline. Only use on the DSP worker, not a WASAPI callback.
+pub struct NoiseReducer{
+    state:Box<nnnoiseless::DenoiseState<'static>>,
+    input:[f32;480],output:[f32;480],used:usize,first:bool,rate:RateConverter,
+}
+impl NoiseReducer{
+    pub fn new(output_rate:u32)->Result<Self,&'static str>{
+        Ok(Self{state:nnnoiseless::DenoiseState::new(),input:[0.0;480],output:[0.0;480],used:0,first:true,rate:RateConverter::new(48000,output_rate)?})
+    }
+    pub fn push(&mut self,pcm:&[i16],mut emit:impl FnMut(i16)){
+        for &sample in pcm{
+            self.input[self.used]=f32::from(sample);self.used+=1;
+            if self.used==480{
+                self.state.process_frame(&mut self.output,&self.input);self.used=0;
+                if self.first{self.first=false;continue;}
+                for &v in &self.output{
+                    let v=if v.is_finite(){v.round().clamp(-32768.0,32767.0) as i16}else{0};
+                    self.rate.push(v,&mut emit);
+                }
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod noise_tests{
+    use super::*;
+    #[test]
+    fn rnnoise_framing_keeps_rate_and_discards_first_frame(){
+        let mut nr=NoiseReducer::new(16000).unwrap();let mut out=Vec::new();
+        for _ in 0..100{nr.push(&[0;480],|v|out.push(v));}
+        assert_eq!(out.len(),99*160);assert!(out.iter().all(|v|v.abs()<10));
+    }
+}

@@ -21,3 +21,5 @@ Decisions: Windows x64; unchanged V2 archive hash; optional frame chunk experime
 Last fully verified checkpoint before desktop integration: c5b099a1 (Windows/Linux, 2091 cases). Later changes require their own successful CI. Native installer is a branch artifact, not a public release.
 
 Windows application checks for ad68aaf6 passed (31 Rust tests, 2091 comparisons, hooks, window lifecycle, GSI and native Vosk). Packaging failed only because NSIS was absent from runner; explicit NSIS install added. Added on-demand separate WebView2 settings host and browser fallback, software conversion for requested rates in the session, monitor-aware overlay, and deterministic lockfile checks. New dependencies and behavior require new CI.
+
+Added opt-in pure Rust RNNoise, separate DSP thread, diagnostic-only recovery when audio/hook fails, and idle CPU reductions. No claim of measured speed or recognition quality. The original Chrome WebRTC echo cancellation is not replicated (requires playback reference). New Windows/Linux CI must confirm compilation and tests.
