@@ -30,3 +30,5 @@ Explicit native GSI install/restore uses a separate recovery record, preserves e
 Settings and OBS HTTP/SSE adapters added using the original HTML/CSS and native audio state. Native settings save/restart, dictionary search, report, GSI repair and bindings import wired. Browser is temporary settings host; native game overlay/tray still pending. No browser-side capture or WASM runtime.
 
 Native Win32 tray and overlay adapter implemented, with lifecycle smoke test. Settings currently open in default browser; native WebView2 settings window remains a possible separate host. The game overlay is now native rather than a Chromium renderer; exact visual parity and multi-monitor behavior are not yet verified.
+
+Native NSIS packaging, installed-engine verification, single-instance guard, restart and installer upgrade/removal tests added. Installer is a branch artifact only, live shortcut is explicit. Remaining: real microphone/recognition benchmarking, actual Dota casts, native settings host, detailed overlay visual parity, dependency locking/audit and final end-to-end testing.

@@ -28,6 +28,8 @@ jobs:
       - run: cargo test --all-targets
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release
+        env:
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -43,6 +45,20 @@ jobs:
         run: python scripts/gsi-smoke.py
       - name: Native Vosk with verified V2 (16/48 kHz)
         run: python scripts/native-smoke.py
+      - name: Build native standalone installer
+        if: runner.os == 'Windows'
+        run: python scripts/package-windows.py
+      - name: Test native standalone installation, repair and uninstall
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: python scripts/installer-smoke.py
+      - uses: actions/upload-artifact@v4
+        if: success() && runner.os == 'Windows'
+        with:
+          name: rust-native-installer
+          path: |
+            rust-native/build-output/VoiceInvoker-Native-Setup-*.exe
+            rust-native/build-output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Windows'
         with:

@@ -1,7 +1,10 @@
 use std::{path::Path,io::Write};
 use voice_invoker_native::{catalog,config::Config,recognition::Parser,speech::SpeechSession,model,vosk::Vosk,audio::Blocks};
 fn main(){
-    if let Err(e)=run(){eprintln!("Voice Invoker native: {e}");std::process::exit(1);}
+    if let Err(e)=run(){eprintln!("Voice Invoker native: {e}");
+        #[cfg(windows)]
+        if std::env::args().nth(1).as_deref()==Some("launch"){voice_invoker_native::launcher::fatal(&e.to_string());}
+        std::process::exit(1);}
 }
 fn run()->Result<(),Box<dyn std::error::Error>>{
     let args:Vec<String>=std::env::args().skip(1).collect();
@@ -66,13 +69,15 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             voice_invoker_native::gsi_server::monitor(&cfg,seconds)?;
         },
         #[cfg(windows)]
+        Some("check-install") if args.len()==1=>{let exe=std::env::current_exe()?;voice_invoker_native::launcher::verify_install(exe.parent().ok_or("Missing application directory")?)?;},
+        #[cfg(windows)]
         Some("launch") if args.iter().skip(1).all(|s|s=="--live"||s=="--dota")=>voice_invoker_native::launcher::launch(args.iter().any(|s|s=="--live"),args.iter().any(|s|s=="--dota"))?,
         #[cfg(windows)]
         Some("session") if (4..=6).contains(&args.len())=>{
             let config=Config::load(Path::new(&args[3]))?;
             let live=args.iter().skip(4).any(|s|s=="--live");
             let seconds=args.iter().skip(4).find(|s|s.as_str()!="--live").map(|s|s.parse()).transpose()?.unwrap_or(300);
-            voice_invoker_native::desktop::run(Path::new(&args[1]),Path::new(&args[2]),config,Path::new(&args[3]),live,seconds,false)?;
+            if voice_invoker_native::desktop::run(Path::new(&args[1]),Path::new(&args[2]),config,Path::new(&args[3]),live,seconds,false)?{std::process::Command::new(std::env::current_exe()?).args(std::env::args_os().skip(1)).spawn()?;}
         },
         #[cfg(windows)]
         Some("shell-smoke") if args.len()==1=>voice_invoker_native::shell::smoke()?,

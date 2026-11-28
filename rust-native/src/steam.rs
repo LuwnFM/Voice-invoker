@@ -103,7 +103,23 @@ pub fn diagnostic(c:&crate::config::Config)->serde_json::Value{
     let raw=gsi.as_ref().and_then(|p|fs::read_to_string(p).ok());
     let matches=raw.as_ref().is_some_and(|v|v.contains(&format!("127.0.0.1:{}/gsi",c.port))&&v.contains(&format!("\"{}\"",c.auth_token)));
     let binding_matches=status.bindings.as_ref().map(|b|b.warnings.is_empty()&&["quas","wex","exort","invoke","slot1","slot2","voice"].iter().all(|k|b.keys.contains_key(*k))&&b.keys.iter().all(|(k,v)|if k=="voice"{&c.voice_chat_key==v}else{c.keys.get(k)==Some(v)})&&b.modes.iter().all(|(k,v)|c.slot_cast_modes.get(k).copied().unwrap_or(if crate::catalog::ITEM_KEYS.contains(&k.as_str()){crate::config::Mode::Quickcast}else{c.cast_mode})==*v));
-    json!({"dotaFound":dota.is_some(),"gsiInstalled":raw.is_some(),"gsiConfigMatches":matches,"itemsConfigured":raw.as_ref().is_some_and(|v|v.split_whitespace().collect::<Vec<_>>().windows(2).any(|w|w==["\"items\"","\"1\""])),"savedLaunchFlag":status.launch_flag,"bindingsIssue":status.issue,"bindingMatches":binding_matches,"bindingWarningsCount":status.bindings.as_ref().map(|b|b.warnings.len()).unwrap_or(0),"local":{"gsiPath":gsi,"bindingWarnings":status.bindings.as_ref().map(|b|&b.warnings)}})
+    json!({"dotaFound":dota.is_some(),"running":process_running("dota2.exe"),"steamRunning":process_running("steam.exe"),"gsiInstalled":raw.is_some(),"gsiConfigMatches":matches,"itemsConfigured":raw.as_ref().is_some_and(|v|v.split_whitespace().collect::<Vec<_>>().windows(2).any(|w|w==["\"items\"","\"1\""])),"savedLaunchFlag":status.launch_flag,"bindingsIssue":status.issue,"bindingMatches":binding_matches,"bindingWarningsCount":status.bindings.as_ref().map(|b|b.warnings.len()).unwrap_or(0),"local":{"gsiPath":gsi,"bindingWarnings":status.bindings.as_ref().map(|b|&b.warnings)}})
+}
+#[cfg(windows)]
+pub fn process_running(name:&str)->bool{
+    use windows_sys::Win32::{Foundation::{CloseHandle,INVALID_HANDLE_VALUE},System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot,Process32FirstW,Process32NextW,PROCESSENTRY32W,TH32CS_SNAPPROCESS}};
+    unsafe{
+        let snap=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+        if snap==INVALID_HANDLE_VALUE{return false;}
+        let mut entry:PROCESSENTRY32W=std::mem::zeroed();entry.dwSize=std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut ok=Process32FirstW(snap,&mut entry);let mut found=false;
+        while ok!=0{
+            let end=entry.szExeFile.iter().position(|v|*v==0).unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..end]).eq_ignore_ascii_case(name){found=true;break;}
+            ok=Process32NextW(snap,&mut entry);
+        }
+        CloseHandle(snap);found
+    }
 }
 #[cfg(test)]
 mod tests {

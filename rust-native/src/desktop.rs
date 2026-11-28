@@ -1,7 +1,7 @@
 //! Experimental unified Windows session. Dry run by default; live mode explicit.
 use crate::{catalog,config::Config,capture::Capture,gsi_server::Server,recognition::Parser,model,vosk::Vosk,runtime::Runtime,win_input::{Hook,focused},win_execute::Execution,input::Event};
 use std::{path::Path,sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
-pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:bool,seconds:u64,verified:bool)->Result<(),Box<dyn std::error::Error>>{
+pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:bool,seconds:u64,verified:bool)->Result<bool,Box<dyn std::error::Error>>{
     if !(1..=86400).contains(&seconds){return Err("Session seconds must be 1..86400".into());}
     let live=live&&!config.test_only;
     let words=model::read_words(model_path)?;
@@ -113,5 +113,5 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
         std::thread::sleep(Duration::from_millis(2));
     }
     arm.store(false,Ordering::Release);drop(active);runtime.ready(false,start.elapsed().as_millis() as u64);hook.stop()?;shell.stop()?;drop(server);drop(capture);
-    if restart{std::thread::sleep(Duration::from_millis(150));std::process::Command::new(std::env::current_exe()?).args(std::env::args_os().skip(1)).spawn()?;}Ok(())
+    Ok(restart)
 }
