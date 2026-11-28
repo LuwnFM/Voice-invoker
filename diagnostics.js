@@ -2,17 +2,10 @@
 // separately. Never edit Steam, close the game or apply input.
 const {execFile}=require('node:child_process');
 const fs=require('node:fs'),path=require('node:path');
-const {parseVdf,readBindings}=require('./dota-bindings');
+const {parseVdf,readBindings,readVdfFile,chooseSteamAccount,BINDING_SUFFIX}=require('./dota-bindings');
 const flag=/ (?:-gamestateintegration)(?=\s|$)/i;
 const hasFlag=value=>flag.test(' '+String(value||'').trim());
-function chooseAccount(steam,active){
- const root=path.join(steam,'userdata');
- const ids=fs.readdirSync(root).filter(id=>/^\d+$/.test(id)&&id!=='0');
- if(active!==undefined&&active!==null)try{const id=String(BigInt(active));if(ids.includes(id))return id;}catch{}
- // Do not guess if multiple accounts are present. MostRecent is a saved
- // preference and not proof of the active account.
- return ids.length===1?ids[0]:null;
-}
+const chooseAccount=chooseSteamAccount;
 function savedLaunchOptions(text){
  const store=parseVdf(text).userlocalconfigstore;
  const apps=store?.software?.valve?.steam?.apps;
@@ -25,12 +18,12 @@ function discoverDota(steam,exe){
  if(!steam)return null;
  const libs=[steam];
  try{
-  const v=parseVdf(fs.readFileSync(path.join(steam,'steamapps','libraryfolders.vdf'),'utf8')).libraryfolders;
+  const v=parseVdf(readVdfFile(path.join(steam,'steamapps','libraryfolders.vdf'))).libraryfolders;
   for(const entry of Object.values(v||{}))if(entry&&typeof entry==='object'&&entry.path)libs.push(entry.path);
  }catch{}
  for(const lib of libs){
   const apps=path.join(lib,'steamapps');
-  try{const install=parseVdf(fs.readFileSync(path.join(apps,'appmanifest_570.acf'),'utf8')).appstate?.installdir;
+  try{const install=parseVdf(readVdfFile(path.join(apps,'appmanifest_570.acf'))).appstate?.installdir;
    if(install&&valid(path.join(apps,'common',install)))return path.join(apps,'common',install);
   }catch{}
   const standard=path.join(apps,'common','dota 2 beta');if(valid(standard))return standard;
@@ -43,11 +36,11 @@ function inspectSteam(steam,active){
   const id=chooseAccount(steam,active);
   if(!id)return {savedLaunchFlag:null,bindings:null,bindingsIssue:'account-unknown'};
   const root=path.join(steam,'userdata',id);
-  const bindingFile=path.join(root,'570','remote','cfg','dotakeys_personal.lst');
+  const bindingFile=path.join(root,BINDING_SUFFIX);
   let savedLaunchFlag=null;
-  try{savedLaunchFlag=savedLaunchOptions(fs.readFileSync(path.join(root,'config','localconfig.vdf'),'utf8'));}catch{}
+  try{savedLaunchFlag=savedLaunchOptions(readVdfFile(path.join(root,'config','localconfig.vdf')));}catch{}
   try{
-   const bindings=readBindings(fs.readFileSync(bindingFile,'utf8'));
+   const bindings=readBindings(readVdfFile(bindingFile));
    return {savedLaunchFlag,bindings,bindingsIssue:null,bindingFile};
   }catch{return {savedLaunchFlag,bindings:null,bindingsIssue:'bindings-unreadable',bindingFile};}
  }catch{return {savedLaunchFlag:null,bindings:null,bindingsIssue:'account-unknown'};}
@@ -72,12 +65,12 @@ function processStatus(force=false){
 function bindingSignature(bindings){
  if(!bindings||!Object.keys(bindings.keys||{}).length)return null;
  const ordered=value=>Object.entries(value||{}).sort(([a],[b])=>a.localeCompare(b));
- return JSON.stringify([ordered(bindings.keys),ordered(bindings.slotCastModes),[...(bindings.warnings||[])].sort()]);
+ return JSON.stringify([ordered(bindings.keys),ordered(bindings.slotCastModes),ordered(bindings.itemCastModes),[...(bindings.warnings||[])].sort()]);
 }
 function supportReport(d){
  // Explicit allowlist. Never copy raw log lines, local paths, microphone labels,
  // Steam account IDs, authentication tokens or user-defined phrases/transcripts.
- const {version,electron,os,running,steamRunning,savedLaunchFlag,launchFlag,dotaFound,gsiInstalled,gsiConfigMatches,itemsConfigured,gsiAgeMs,gsiRejected,hero,alive,slots,abilities,items,bindingMatches,bindingsChanged,bindingWatching,bindingsIssue,bindingWarningsCount,voiceReady,voiceFailed,hookReady,hookFailed,enabled,modelVerified,modelAvailable,modelDictionaryReady,configInvalid,configBackup,experimentalActive,profile,port,serverReady,testOnly,activePhrases,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings}=d;
- return ['Voice Invoke — отчёт для поддержки',new Date().toISOString(),'== Диагностика ==',JSON.stringify({version,electron,os,running,steamRunning,savedLaunchFlag,launchFlag,dotaFound,gsiInstalled,gsiConfigMatches,itemsConfigured,gsiAgeMs,gsiRejected,hero,alive,slots,abilities,items,bindingMatches,bindingsChanged,bindingWatching,bindingsIssue,bindingWarningsCount,voiceReady,voiceFailed,hookReady,hookFailed,enabled,modelVerified,modelAvailable,modelDictionaryReady,configInvalid,configBackup,experimentalActive,profile,port,serverReady,testOnly,activePhrases,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings},null,2)].join('\n');
+ const {version,electron,os,running,steamRunning,savedLaunchFlag,launchFlag,dotaFound,gsiInstalled,gsiConfigMatches,itemsConfigured,gsiAgeMs,gsiRejected,hero,alive,selected,slots,abilities,items,bindingMatches,bindingsChanged,bindingWatching,bindingsIssue,bindingWarningsCount,voiceReady,voiceFailed,hookReady,hookFailed,enabled,modelVerified,modelAvailable,modelDictionaryReady,configInvalid,configBackup,experimentalActive,profile,port,serverReady,testOnly,activePhrases,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings}=d;
+ return ['Voice Invoke — отчёт для поддержки',new Date().toISOString(),'== Диагностика ==',JSON.stringify({version,electron,os,running,steamRunning,savedLaunchFlag,launchFlag,dotaFound,gsiInstalled,gsiConfigMatches,itemsConfigured,gsiAgeMs,gsiRejected,hero,alive,selected,slots,abilities,items,bindingMatches,bindingsChanged,bindingWatching,bindingsIssue,bindingWarningsCount,voiceReady,voiceFailed,hookReady,hookFailed,enabled,modelVerified,modelAvailable,modelDictionaryReady,configInvalid,configBackup,experimentalActive,profile,port,serverReady,testOnly,activePhrases,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings},null,2)].join('\n');
 }
 module.exports={processStatus,hasFlag,savedLaunchOptions,discoverDota,chooseAccount,inspectSteam,supportReport,bindingSignature};

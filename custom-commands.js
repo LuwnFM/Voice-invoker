@@ -1,3 +1,4 @@
+const {namedItemTargets}=require('./items');
 const SPELLS=require('./spells');
 const {mergeCatalog,exclusions,enabledPhrases}=require('./phrase-preferences');
 const {validatePhrases,validateItemPhrases}=require('./item-phrases');
@@ -13,10 +14,13 @@ function resolveCommands(base, extra, preferences, words, expanded, {strict=true
   const all=mergeCatalog(base,custom.phrases);
   const reserved=enabledPhrases(all,disabled,extra,true);
   const items=validateItemPhrases(preferences.itemPhrases,words,reserved,{strict});
+  let targets=[],targetError=[];
+  try{targets=namedItemTargets(preferences.namedItemPhrases);}catch(e){if(strict)throw e;targetError.push(e.message);}
+  const named=validatePhrases(preferences.namedItemPhrases,words,{...reserved,...items.phrases},{strict,targets});
   return {
-    active:{...enabledPhrases(all,disabled,extra,expanded),...items.phrases},
-    customSpellPhrases:custom.phrases,itemPhrases:items.phrases,
-    disabledPhrases:exclusions(disabled,all),errors:[...custom.errors,...items.errors]
+    active:{...enabledPhrases(all,disabled,extra,expanded),...items.phrases,...named.phrases},
+    customSpellPhrases:custom.phrases,itemPhrases:items.phrases,namedItemPhrases:named.phrases,
+    disabledPhrases:exclusions(disabled,all),errors:[...custom.errors,...items.errors,...targetError,...named.errors]
   };
 }
 module.exports={resolveCommands};

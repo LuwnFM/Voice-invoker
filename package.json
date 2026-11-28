@@ -1,6 +1,7 @@
 {
   "name": "voice-invoke",
-  "version": "1.1.1",
+  "version": "1.1.1-a",
+  "releaseVersion": "1.1.1a",
   "description": "Перед Invoke нужно произнести название способности вслух — клавиши Dota блокируются, пока не скажешь верно",
   "main": "main.js",
   "private": true,

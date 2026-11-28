@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const SPELLS = require('../spells');
-const { ACTION, createVoiceCast, vkOf } = require('../logic');
+const { ITEM_SLOTS, planItem } = require('../items');
+const { ACTION, createVoiceCast, vkOf, SELECT_HERO_ACTION } = require('../logic');
 const { decodeVoiceCommand } = require('../phrase-parser');
 const { NORMAL, getTiming, normalizeProfile, encodeCast, decodeCast, MAX_CAST_ID } = require('../timing-profiles');
 
@@ -17,13 +18,13 @@ function harness(withGsi = false, realPlan = false) {
   const requests=[], timers=new Map(), events=[];
   let timerId=0;
   const ctx=vm.createContext({
-    SPELLS, ACTION, decodeVoiceCommand, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
+    SPELLS, ITEM_SLOTS, planItem, ACTION, SELECT_HERO_ACTION, vkOf, decodeVoiceCommand, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
     config:{...NORMAL,slotWaitMs:1500,timingProfile:'normal'},
     last:{state:{enabled:true,voiceReady:true,timingProfile:'normal'}},
     gsi:withGsi?{at:now,hero:'npc_dota_hero_invoker',alive:true,slots:[],abilities:{}}:null,
     gsiWarned:false,
     predicted:null, prediction:()=>ctx.predicted,
-    phraseToSpell:{a:SPELLS[0].id,b:SPELLS[1].id},
+    phraseToSpell:{a:SPELLS[0].id,b:SPELLS[1].id,c:ITEM_SLOTS[0].id},
     plan:()=>({action:ACTION.INVOKE}),
     toHook:(message,spell,encoded)=>{requests.push({spell,...decodeCast(encoded)});return true;},
     log(){}, broadcast:m=>events.push(m),
@@ -132,4 +133,80 @@ test('hold-to-talk release and re-press preserve a queued combo in every profile
   assert.equal(h.requests.length,1);h.ack(h.requests[0]);h.advance(100);h.api.pump();
   assert.equal(h.requests.length,2);assert.equal(h.requests[1].profile,profile);assert.equal(voice.state.listening,false);
  }
+});
+
+test('explicit lost selection restores hero once and waits for fresh confirmation',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};
+ h.ctx.gsi.selected=false;h.ctx.gsi.slots=[SPELLS[0].id];
+ h.api.castByPhrase('a');assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,SELECT_HERO_ACTION);
+ h.ack(h.requests[0]);h.advance(100);h.api.pump();assert.equal(h.requests.length,1);
+ h.ctx.gsi={...h.ctx.gsi,at:1100,selected:true};h.api.pump();
+ assert.equal(h.requests.length,2);assert.equal(h.requests[1].action,ACTION.SLOT1);
+});
+test('failed selection confirmation refuses instead of casting on another unit',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};h.ctx.gsi.selected=false;
+ h.api.castByPhrase('a');h.ack(h.requests[0]);h.advance(1100);h.api.pump();
+ assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'refuse');
+ const g=harness(true,true);g.ctx.gsi.selected=false;g.api.castByPhrase('a');assert.equal(g.requests.length,0);assert.equal(g.events.at(-1).event,'refuse');
+});
+test('after an actual click, missing selection field triggers one recovery before next cast',()=>{
+ const h=harness(false);h.ctx.config.keys={selectHero:'F1'};
+ h.api.castByPhrase('a');h.api.castByPhrase('b');
+ h.api.handleCastComplete({...h.requests[0],ok:true,clicked:true,elapsedMs:1});
+ h.advance(40);h.api.pump();assert.equal(h.requests[1].action,SELECT_HERO_ACTION);
+ h.ack(h.requests[1]);h.advance(60);h.api.pump();assert.equal(h.requests.length,3);assert.equal(h.requests[2].action,ACTION.INVOKE);
+});
+test('confirmed selected hero after a click does not generate extra selection',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};h.ctx.gsi.slots=[SPELLS[0].id,SPELLS[1].id];
+ h.api.castByPhrase('a');h.api.castByPhrase('b');h.api.handleCastComplete({...h.requests[0],ok:true,clicked:true,elapsedMs:1});
+ h.advance(40);h.ctx.gsi={...h.ctx.gsi,at:1040,selected:true};h.api.pump();
+ assert.equal(h.requests.length,2);assert.equal(h.requests[1].action,ACTION.SLOT2);
+});
+
+test('Rod of Atos followed by a spell restores selection without replaying the item',()=>{
+ const h=harness(true,true);h.ctx.config.keys={item1:'X',selectHero:'F1'};
+ h.ctx.config.slotCastModes={item1:'click'};
+ h.ctx.gsi.items=[{name:'item_rod_of_atos',cooldown:0,can_cast:true}];
+ h.ctx.gsi.slots=[SPELLS[0].id];
+ h.api.castByPhrase('c');h.api.castByPhrase('a');
+ assert.equal(h.requests[0].spell,SPELLS.length+1);assert.equal(h.requests[0].action,ACTION.SLOT1);
+ h.api.handleCastComplete({...h.requests[0],ok:true,clicked:true,elapsedMs:1});
+ h.advance(40);h.ctx.gsi={...h.ctx.gsi,at:1040,selected:false};h.api.pump();
+ assert.equal(h.requests[1].action,SELECT_HERO_ACTION);
+ h.ack(h.requests[1]);h.advance(100);h.ctx.gsi={...h.ctx.gsi,at:1140,selected:true};h.api.pump();
+ assert.equal(h.requests.length,3);assert.equal(h.requests[2].spell,1);assert.equal(h.requests[2].action,ACTION.SLOT1);
+});
+test('selection loss between Invoke and slot waits for recovery and preserves profile',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};
+ h.ctx.last.state.timingProfile='turbo';h.api.castByPhrase('a');h.ack(h.requests[0]);
+ h.advance(50);h.ctx.gsi={...h.ctx.gsi,at:1050,selected:false,slots:[SPELLS[0].id]};
+ h.api.checkSlot();assert.equal(h.requests[1].action,SELECT_HERO_ACTION);
+ h.ctx.last.state.timingProfile='normal';h.ack(h.requests[1]);h.advance(100);
+ h.ctx.gsi={...h.ctx.gsi,at:1150,selected:true};h.api.checkSlot();
+ assert.equal(h.requests.length,3);assert.equal(h.requests[2].action,ACTION.SLOT1);assert.equal(h.requests[2].profile,'turbo');
+});
+test('after a click, a different GSI hero waits for the original Invoker packet',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};h.ctx.gsi.slots=[SPELLS[0].id,SPELLS[1].id];
+ h.api.castByPhrase('a');h.api.castByPhrase('b');
+ h.api.handleCastComplete({...h.requests[0],ok:true,clicked:true,elapsedMs:1});
+ h.advance(40);h.ctx.gsi={...h.ctx.gsi,at:1040,hero:'npc_dota_hero_axe'};h.api.pump();
+ assert.equal(h.requests[1].action,SELECT_HERO_ACTION);h.ack(h.requests[1]);h.advance(100);h.api.pump();assert.equal(h.requests.length,2);
+ h.ctx.gsi={...h.ctx.gsi,at:1140,hero:'npc_dota_hero_invoker'};h.api.pump();assert.equal(h.requests[2].action,ACTION.SLOT2);
+});
+
+test('deselection during Invoke with empty slot data recovers before reading slots',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};
+ h.api.castByPhrase('a');h.ack(h.requests[0]);h.advance(50);
+ h.ctx.gsi={...h.ctx.gsi,at:1050,selected:false,slots:[]};h.api.checkSlot();
+ assert.equal(h.requests[1].action,SELECT_HERO_ACTION);h.ack(h.requests[1]);
+ h.advance(100);h.ctx.gsi={...h.ctx.gsi,at:1150,selected:true,slots:[SPELLS[0].id]};
+ h.api.checkSlot();assert.equal(h.requests[2].action,ACTION.SLOT1);
+});
+
+test('named item resolves its current slot at execution, including a moved Atos',()=>{
+ const h=harness(true,true);h.ctx.phraseToSpell.c='item_rod_of_atos';h.ctx.config.keys={item1:'X',item2:'Y'};
+ h.ctx.gsi.items=[{name:'item_rod_of_atos',cooldown:0,can_cast:true},null];
+ h.api.castByPhrase('c');assert.equal(h.requests[0].spell,SPELLS.length+1);h.ack(h.requests[0]);
+ h.advance(2600);h.ctx.gsi.at=3600;h.ctx.gsi.items=[null,{name:'item_rod_of_atos',cooldown:0,can_cast:true}];h.api.castByPhrase('c');
+ assert.equal(h.requests[1].spell,SPELLS.length+2);assert.equal(h.requests[1].action,ACTION.SLOT2);
 });

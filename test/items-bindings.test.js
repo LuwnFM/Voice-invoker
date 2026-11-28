@@ -68,3 +68,57 @@ test('binding changes detect keys or cast modes, not property order',()=>{
  assert.notEqual(bindingSignature(a),bindingSignature({...a,keys:{quas:'A',wex:'W'}}));
  assert.equal(bindingSignature(null),null);
 });
+
+test('VDF supports literal backslash, comments and quoted braces',()=>{
+ const {parseVdf}=require('../dota-bindings');
+ const raw='"KeyBindings" { // comment\n "Keys" { "HeroSelect" { "Key" "F1" } "AbilitySecondary1" { "Key" "D" "Mode" "1" } "Unused" { "Key" "'+String.fromCharCode(92)+'" } "Other" "}" [$WIN32] } "Items" { "item_rod_of_atos" { "Mode" "1" } } }';
+ const data=readBindings(raw);assert.equal(data.keys.selectHero,'F1');assert.equal(data.slotCastModes.slot1,'quickcast');assert.equal(data.itemCastModes.item_rod_of_atos,'quickcast');
+ assert.equal(parseVdf(raw).keybindings.keys.unused.key,String.fromCharCode(92));assert.throws(()=>parseVdf('"KeyBindings" { "Keys"'));
+});
+test('named items follow inventory and refuse absent or stale data',()=>{
+ const item={name:'item_rod_of_atos',cooldown:0,can_cast:true},s={name:'Atos',itemName:item.name};
+ const c={keys:{item1:'X',item2:'Y'},slotCastModes:{item1:'quickcast',item2:'quickcast'},itemCastModes:{[item.name]:'click'},syncQuickcast:true,syncedItemCastModes:{[item.name]:'quickcast'}};
+ const g={at:100,hero:'npc_dota_hero_invoker',alive:true,items:[null,item]};
+ assert.deepEqual(planItem(s,g,c,false,101),{itemSlot:2,action:ACTION.SLOT2});
+ assert.equal(planItem(s,{...g,items:[item,null]},c,false,101).itemSlot,1);
+ assert.ok(planItem(s,{...g,items:[]},c,false,101).refuse);assert.ok(planItem(s,g,c,false,6000).refuse);
+});
+
+test('VDF reader handles UTF8 BOM and both UTF16 byte orders',()=>{
+ const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+ const {readVdfFile}=require('../dota-bindings');const dir=fs.mkdtempSync(path.join(os.tmpdir(),'vi-vdf-'));
+ try{
+   const file=path.join(dir,'fixture.lst'),sample='KeyBindings { Keys { HeroSelect { Key F1 } AbilitySecondary1 { Key D Mode 1 } } }';
+   for(const bytes of [Buffer.concat([Buffer.from([239,187,191]),Buffer.from(sample)]),Buffer.concat([Buffer.from([255,254]),Buffer.from(sample,'utf16le')]),Buffer.concat([Buffer.from([254,255]),Buffer.from(sample,'utf16le').swap16()])]){
+     fs.writeFileSync(file,bytes);assert.equal(readBindings(readVdfFile(file)).keys.selectHero,'F1');assert.equal(readBindings(readVdfFile(file)).slotCastModes.slot1,'quickcast');
+   }
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('real Dota LOL and ARROW layout shapes survive account switches',()=>{
+ const {bindingUpdate}=require('../binding-sync');
+ const consoleKey='Console { Key "'+String.fromCharCode(92)+'" }';
+ const make=(quick,voice)=>{
+   const primary=['AbilityPrimary1','AbilityPrimary2','AbilityPrimary3','AbilityUltimate','AbilitySecondary1','AbilitySecondary2'];
+   const actions=[...primary,...Array.from({length:6},(_,i)=>'Inventory'+(i+1)),'InventoryNeutral','InventoryTP'];
+   const keys=quick?['Q','W','E','R','D','F','1','2','3','4','5','6','V','U']:['Q','W','E','R','V','F','A','S','D','Z','X','C','B','T'];
+   const lines=actions.map((action,i)=>{
+     if(quick&&action!=='InventoryTP')return action+' { Mode 2 } '+action+'QuickCast { Key '+keys[i]+' Mode 2 }';
+     return action+' { Key '+keys[i]+' Mode '+(quick?'2':action==='InventoryNeutral'?'-1':'0')+' }';
+   });
+   return 'KeyBindings { UseHeroBindings 0 Keys { '+consoleKey+' '+lines.join(' ')+' HeroSelect { Key '+(quick?'SPACE':'F1')+' } ChatVoiceTeam { '+(voice?'Key '+voice:'')+' Mode 0 } } Items { item_rod_of_atos { Mode 2 } } }';
+ };
+ const a=readBindings(make(true,'TAB')),b=readBindings(make(true,'')),c=readBindings(make(false,'G'));
+ assert.equal(a.keys.selectHero,'SPACE');assert.equal(a.keys.voice,'TAB');
+ assert.equal(a.slotCastModes.neutral,'quickcast');assert.equal(a.itemCastModes.item_rod_of_atos,'quickcast');
+ assert.equal(b.keys.voice,undefined);
+ const original={keys:{},voiceChatKey:'G',slotCastModes:{neutral:'click'}};
+ const first=bindingUpdate(a,original),second=bindingUpdate(b,{...original,...first});
+ assert.equal(second.voiceChatKey,'TAB');assert.equal(second.keys.slot1,'D');
+ const third=bindingUpdate(c,{...original,...second});
+ assert.equal(third.keys.slot1,'V');assert.equal(third.keys.item3,'D');assert.equal(third.keys.selectHero,'F1');assert.equal(third.voiceChatKey,'G');
+ assert.equal(third.slotCastModes.slot1,'click');assert.equal(third.slotCastModes.item1,'click');assert.equal(third.slotCastModes.neutral,undefined);
+ const gsi={at:100,hero:'npc_dota_hero_invoker',alive:true,items:[null,null,null,null,null,null,{name:'item_example',cooldown:0,can_cast:true}]};
+ assert.equal(planItem(ITEM_SLOTS[6],gsi,third,false,101).action,ACTION.SLOT2);
+ assert.equal(bindingUpdate(c,{...original,...second},false).slotCastModes.neutral,'quickcast');
+});

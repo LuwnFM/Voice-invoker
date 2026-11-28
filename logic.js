@@ -14,6 +14,8 @@ const VK_ALT = [0x12, 0xa4, 0xa5];
 // PREPARE — только собрать (сферы + Invoke); клавишу способности нажмём отдельно,
 // когда Dota подтвердит, что способность появилась в слоте
 const ACTION = { SLOT1: 1, SLOT2: 2, INVOKE: 3, PREPARE: 4 };
+// Separate request: select our hero, without casting or moving the cursor.
+const SELECT_HERO_ACTION = 5;
 
 const VK_F9 = 0x78;
 const VK_F10 = 0x79;
@@ -41,6 +43,9 @@ function vkOf(key) {
   if (/^[A-Z0-9]$/.test(k)) return k.charCodeAt(0);
   return NAMED_KEYS[k] || 0;
 }
+
+// Unknown mode under automatic Quickcast sync: do not guess an extra click.
+function effectiveSlotMode(config,key){return config.slotCastModes?.[key]||(config.autoSyncBindings!==false&&config.syncQuickcast===true?'quickcast':config.castMode);}
 
 function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () => {} }) {
   const orbKey = { Q: config.keys.quas, W: config.keys.wex, E: config.keys.exort };
@@ -136,6 +141,10 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
   function buildSequence(spell, action, profile = s.timingProfile) {
     const timing = getTiming(config, profile);
     const steps = [];
+    if(action===SELECT_HERO_ACTION){
+      const vk=vkOf(config.keys?.selectHero);if(!vk)throw Error('Select Hero key missing');
+      return [{type:'key',vk,wait:0}];
+    }
     if(spell.itemSlot){
       const vk=vkOf(config.keys?.[spell.key]);
       if(!vk||![ACTION.SLOT1,ACTION.SLOT2].includes(action))throw Error('Invalid item slot');
@@ -163,7 +172,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
       key(slot, timing.altDelayMs);
       steps.push({ type: 'up', vk: VK_ALT[1], wait: timing.altDelayMs });
     } else key(slot, wait);
-    const slotMode = config.slotCastModes?.[action === ACTION.SLOT2 ? 'slot2' : 'slot1'] || config.castMode;
+    const slotMode = effectiveSlotMode(config,action === ACTION.SLOT2 ? 'slot2' : 'slot1');
     if (slotMode === 'click' && spell.target) steps.push({ type: 'click', wait: timing.clickDelayMs });
 
     return steps;
@@ -182,4 +191,14 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
   return { handleKey, setVoiceReady, buildSequence, state: s, send, toggle, updateBindings };
 }
 
-module.exports = { createVoiceCast, vkOf, ACTION };
+// A manual click between the targeting key and our confirmation supersedes it.
+function createClickGuard(){
+  let armed=false,interrupted=false;
+  return {
+    reset(){armed=false;interrupted=false;},
+    arm(){armed=true;interrupted=false;},
+    manualClick(){if(armed)interrupted=true;},
+    get interrupted(){return interrupted;},
+  };
+}
+module.exports = { createVoiceCast, vkOf, ACTION, SELECT_HERO_ACTION, createClickGuard };

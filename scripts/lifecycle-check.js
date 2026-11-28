@@ -76,6 +76,8 @@ async function ready(previous=0) {
   assert.equal((await (await fetch(base+'/config')).json()).voiceChatKey,'T');
   fs.writeFileSync(bindingFile,bindingFixture('A','T'));
   console.log('PASS: live file replacement, native acknowledgement, persistence and conflicting binding rejection without Electron restart');
+  await waitFor('live dictionary feedback in both editors',()=>fs.existsSync(path.join(dir,'dictionary-ui-'+first)));
+  console.log('PASS: dictionary validation in ability and item editors, including unknown words');
   const reportResponse=await fetch(base+'/copy-report',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(reportResponse.status,204);
   // Disabled aliases must disappear from the live grammar after restart.
   const preferences=await (await fetch(base+'/config')).json();
@@ -83,10 +85,14 @@ async function ready(previous=0) {
   const {readModelWords}=require('../model-words');
   const dictionary=readModelWords(path.join(root,'model',require('../model-manifest.json').filename));
   const used=new Set(Object.values(preferences.phraseCatalog).flat().flatMap(p=>String(p).split(' ')).concat(['ураган','буря','прыжок','щит','телепорт','запиши','записать','фолиант','готовь','готовить','подготовить','подготовь']));
+  const checkedWords=await fetch(base+'/dictionary/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phrases:[' УРАГАН буря ','несуществующеесловоxyz']})});
+  assert.equal(checkedWords.status,200);
+  assert.deepEqual(await checkedWords.json(),{ready:true,words:[{word:'ураган',available:true},{word:'буря',available:true},{word:'несуществующеесловоxyz',available:false}]});
   const candidates=[...dictionary].filter(w=>/^[а-яё]{5,}$/u.test(w)&&!used.has(w));
   const aliases=Object.fromEntries(Object.keys(preferences.phraseCatalog).map(id=>[id,id==='invoker_tornado'?['ураган','буря']:[candidates.shift()]]));
   assert.equal(Object.keys(aliases).length,11);assert.ok(Object.values(aliases).flat().every(w=>typeof w==='string'&&dictionary.has(w)));
-  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,itemCastModes:{item_force_staff:'click'},customSpellPhrases:aliases,itemPhrases:{item_slot_item1:['прыжок','эмп'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
+  const namedPhrase=candidates.shift();assert.ok(namedPhrase&&dictionary.has(namedPhrase));
+  const saved=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabledPhrases:disabled,testOnly:true,itemCastModes:{item_force_staff:'click'},customSpellPhrases:aliases,namedItemPhrases:{item_rod_of_atos:[namedPhrase]},itemPhrases:{item_slot_item1:['прыжок','эмп'],item_slot_neutral:['щит'],item_slot_teleport:['телепорт']}})});
   assert.equal(saved.status,200);
   assert.equal(fs.readFileSync(config,'utf8'),legacy,'Migrating preferences must not overwrite legacy config');
   assert.equal(JSON.parse(fs.readFileSync(migratedConfig,'utf8')).testOnly,true);
@@ -103,7 +109,7 @@ async function ready(previous=0) {
   for(const p of ['прыжок','щит','телепорт','ураган','буря'])assert.ok(grammar.includes(p),'Missing custom phrase '+p);
   assert.ok(preferences.phraseCatalog.invoker_tornado.every(p=>grammar.includes(p)),'Built-in Tornado aliases lost');
   const updated=await (await fetch(base+'/config')).json();
-  assert.deepEqual(updated.itemCastModes,{item_force_staff:'click'});
+  assert.deepEqual(updated.itemCastModes,{item_force_staff:'click'});assert.deepEqual(updated.namedItemPhrases,{item_rod_of_atos:[namedPhrase]});assert.ok(grammar.includes(namedPhrase));
   for(const [id,phrases] of Object.entries(aliases)){assert.deepEqual(updated.customSpellPhrases[id],phrases);assert.ok(phrases.every(p=>grammar.includes(p)),'Custom phrase missing: '+id);}
   console.log('All 11 abilities accept custom phrases from verified V2 and reload after restart');
   const duplicateAlias=await fetch(base+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customSpellPhrases:{invoker_tornado:['прыжок']}})});

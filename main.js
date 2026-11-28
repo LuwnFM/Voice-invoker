@@ -23,8 +23,8 @@ const path = require('path');
 const { execFileSync, execFile } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
-const { ITEM_KEYS, ITEM_SLOTS, readInventory, planItem, validateItemCastModes } = require('./items');
-const { readModelWords } = require('./model-words');
+const { ITEM_KEYS, ITEM_SLOTS, readInventory, planItem, validateItemCastModes, namedItemTargets } = require('./items');
+const { readModelWords, checkDictionary } = require('./model-words');
 const { resolveCommands } = require('./custom-commands');
 const { importBindings } = require('./dota-bindings');
 const { processStatus, supportReport, bindingSignature } = require('./diagnostics');
@@ -32,12 +32,12 @@ const {bindingUpdate,watchBindingFile,BUFFER_SIZE,writeBindingUpdate}=require('.
 const { allowedHost, allowedOrigin, jsonContentType, readJson } = require('./local-http');
 const { validateKeys } = require('./key-validation');
 const { saveJsonAtomic } = require('./config-storage');
-const { ACTION, vkOf } = require('./logic');
+const { ACTION, vkOf, SELECT_HERO_ACTION } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT, WM_APP_TOGGLE, WM_APP_BINDINGS } = require('./messages');
 
-/** @type {{port:number,authToken:string,keys:Record<string,string>,voiceChatKey:string,blockKeys:string[],listen:string,castMode:string,timingProfile:string,keyDelayMs:number,castDelayMs:number,slotWaitMs:number,clickDelayMs:number,altDelayMs:number,chainGapMs:number,microphone:string,windowTitle:string,phrases:Record<string,string[]>,acceptInjected:boolean,debugSteps:boolean,experimentalFrames?:boolean,testOnly?:boolean,disabledPhrases?:Record<string,string[]>,customSpellPhrases?:Record<string,string[]>,itemPhrases?:Record<string,string[]>,expandedVocabulary?:boolean,slotCastModes?:Record<string,string>,itemCastModes?:Record<string,string>}} */
+/** @type {{port:number,authToken:string,keys:Record<string,string>,voiceChatKey:string,blockKeys:string[],listen:string,castMode:string,timingProfile:string,keyDelayMs:number,castDelayMs:number,slotWaitMs:number,clickDelayMs:number,altDelayMs:number,chainGapMs:number,microphone:string,windowTitle:string,phrases:Record<string,string[]>,acceptInjected:boolean,debugSteps:boolean,experimentalFrames?:boolean,testOnly?:boolean,disabledPhrases?:Record<string,string[]>,customSpellPhrases?:Record<string,string[]>,itemPhrases?:Record<string,string[]>,expandedVocabulary?:boolean,slotCastModes?:Record<string,string>,itemCastModes?:Record<string,string>,namedItemPhrases?:Record<string,string[]>,syncedItemCastModes?:Record<string,string>,autoSyncBindings?:boolean,syncQuickcast?:boolean}} */
 const config = {
   port: 3055,
   // Должен совпадать с "token" в gamestate_integration_voice_invoke.cfg
@@ -55,6 +55,7 @@ const config = {
   //   "click"     — нажать клавишу и кликнуть левой кнопкой (обычный каст в Dota)
   //   "quickcast" — только клавиша (в Dota включён быстрый каст)
   castMode: 'click',
+  autoSyncBindings:true,syncQuickcast:true,
   // Паузы между нажатиями, мс
   timingProfile: 'normal',
   keyDelayMs: 35,
@@ -155,9 +156,9 @@ function configurePhrases(useExpanded) {
   config.phrases=commands.active;
   const isRussian = (phrase) => /[а-яё]/i.test(phrase);
   if(commands.errors.length)log('Пропущенные пользовательские фразы:',commands.errors.join('; '));
-  for (const s of [...SPELLS, ...ITEM_SLOTS]) {
+  for (const s of [...SPELLS, ...ITEM_SLOTS,...namedItemTargets(commands.namedItemPhrases)]) {
     for (const p of config.phrases[s.id] || []) {
-      if (isRussian(p) || 'itemSlot' in s || commands.customSpellPhrases[s.id]?.includes(p)) phraseToSpell[p.toLowerCase()] = s.id;
+      if (isRussian(p) || 'itemSlot' in s || 'itemName' in s || commands.customSpellPhrases[s.id]?.includes(p)) phraseToSpell[p.toLowerCase()] = s.id;
       else skipped.push(p);
     }
   }
@@ -238,6 +239,7 @@ function handleGsi(data) {
     at: Date.now(),
     hero: data.hero?.name || null,
     alive: data.hero?.alive === true,
+    selected: typeof data.hero?.selected_unit==='boolean'?data.hero.selected_unit:null,
     scepter: data.hero?.aghanims_scepter, // undefined, если игра не сообщает
     abilities,
     slots,
@@ -259,7 +261,7 @@ function prediction() {
 
 // Решаем, что нажимать для способности: { action }, { refuse: причина } или { wait: true }
 function plan(spell, prepareOnly = false) {
-  if (spell.itemSlot) return planItem(spell,gsi,config,prepareOnly);
+  if (spell.itemSlot||spell.itemName) return planItem(spell,gsi,config,prepareOnly,Date.now());
   const fresh = gsi && Date.now() - gsi.at < 5000 && gsi.hero;
   if (!fresh) {
     if (!gsiWarned) log('Нет данных от Dota (GSI) — кастую вслепую: сферы + Invoke + слот 1');
@@ -296,6 +298,42 @@ function plan(spell, prepareOnly = false) {
 // Способности, названные подряд, применяются одна за другой: следующая начинается, как только
 // поток хука закончит нажатия предыдущей.
 const queue = [];          // { spell, phrase, at }
+let lastClickAt=null,lastSelectAt=null,selectionTimer=null;
+// Selection packets are optional in GSI. Only use explicit booleans; never infer
+// selection from the hero name or treat missing data as a different hero.
+function selectionStatus(now){
+  return gsi&&now-gsi.at<5000&&gsi.hero==='npc_dota_hero_invoker'&&gsi.alive===true?gsi.selected:null;
+}
+function ensureSelection(entry,profile,resume){
+  const now=Date.now(),selected=selectionStatus(now);
+  const freshHero=gsi&&now-gsi.at<5000&&gsi.hero;
+  const wrongHero=!!freshHero&&freshHero!=='npc_dota_hero_invoker';
+  clearTimeout(selectionTimer);selectionTimer=null;
+  const delay=ms=>{selectionTimer=setTimeout(resume,ms);return {wait:true};};
+  if(selected===true&&(lastClickAt===null||gsi.at>lastClickAt)){lastClickAt=null;}
+  if(entry.selectionAt!==undefined){
+    if(now<busyUntil)return delay(busyUntil-now);
+    if(selected===true&&gsi.at>entry.selectionAt){lastClickAt=null;return {};}
+    if(entry.confirmHero&&freshHero==='npc_dota_hero_invoker'&&gsi.alive===true&&selected!==false&&gsi.at>entry.selectionAt){lastClickAt=null;return {};}
+    if(selected===false||entry.confirmSelection||entry.confirmHero||wrongHero){
+      if(now<entry.selectionAt+1000)return delay(50);
+      return {refuse:'Инвокер не выбран после восстановления; выбери героя вручную'};
+    }
+    // Older clients omit selected_unit. One confirmed key dispatch, no retry loop.
+    lastClickAt=null;return {};
+  }
+  if(selected!==false&&lastClickAt===null)return {};
+  if(!vkOf(config.keys?.selectHero)){
+    if(selected===false)return {refuse:'Инвокер не выбран; назначь клавишу «Выбрать героя» в настройках'};
+    return {}; // legacy config without a verified selection key
+  }
+  // Avoid double-tapping the selection key (which can center the camera).
+  if(lastSelectAt!==null&&now-lastSelectAt<450)return delay(450-(now-lastSelectAt));
+  entry.selectionAt=now;entry.confirmSelection=selected===false;entry.confirmHero=!!wrongHero;
+  if(!dispatchCast(entry.spell,SELECT_HERO_ACTION,profile))return {refuse:'Не удалось восстановить выбор Инвокера'};
+  lastSelectAt=now;
+  return {wait:true};
+}
 let busyUntil = 0;         // пауза после подтверждённой серии
 let activeCast = null;
 let castRequestId = 0;
@@ -309,7 +347,7 @@ function dispatchCast(spell, action, profile) {
   if (activeCast) return false;
   castRequestId = castRequestId % MAX_CAST_ID + 1;
   const id = castRequestId;
-  if (!toHook(WM_APP_CAST, (spell.itemSlot ? SPELLS.length + spell.itemSlot : SPELLS.indexOf(spell) + 1), encodeCast(action, profile, id))) return false;
+  if (!toHook(WM_APP_CAST, (action===SELECT_HERO_ACTION?1:spell.itemSlot ? SPELLS.length + spell.itemSlot : SPELLS.indexOf(spell) + 1), encodeCast(action, profile, id))) return false;
   activeCast = { id, spell, action, profile, timedOut: false, watchdog: null };
   const timing = getTiming(config, profile);
   // Fail closed if the worker stops responding; do not send another series until it replies.
@@ -324,8 +362,9 @@ function dispatchCast(spell, action, profile) {
 }
 
 function handleCastComplete(m) {
-  lastCastStatus=m.ok?'sent':'failed';
   if (!activeCast || m.id !== activeCast.id) return;
+  lastCastStatus=m.ok?'sent':'failed';
+  if(m.clicked===true||m.selectionRisk===true)lastClickAt=Date.now();
   const finished = activeCast;
   clearTimeout(finished.watchdog);
   activeCast = null;
@@ -336,6 +375,12 @@ function handleCastComplete(m) {
     predicted = null;
     busyUntil = 0;
     return broadcast({ ...last, event: 'refuse', spell: finished.spell, reason: m.reason || 'Ошибка ввода' });
+  }
+  if(finished.action===SELECT_HERO_ACTION){
+    busyUntil=Date.now()+60;
+    log('Восстановление выбора Инвокера: клавиша отправлена');
+    if(awaitingSlot)checkSlot();else pump();
+    return;
   }
   if (finished.action === ACTION.PREPARE && awaitingSlot && last?.state.enabled) {
     if (awaitingSlot.prepareOnly && awaitingSlot.unconfirmed) {
@@ -356,6 +401,7 @@ function handleCastComplete(m) {
 
 function discardWaiting() {
   queue.length = 0;
+  clearTimeout(selectionTimer);selectionTimer=null;
   if (awaitingSlot) clearTimeout(awaitingSlot.timer);
   awaitingSlot = null;
   clearTimeout(pumpTimer);
@@ -366,7 +412,7 @@ function discardWaiting() {
 function castByPhrase(command) {
   const { phrase, prepareOnly } = decodeVoiceCommand(command);
   const id=phraseToSpell[phrase];
-  const spell = SPELLS.find(s=>s.id===id) || (id?.startsWith('item_slot_') ? ITEM_SLOTS.find(s=>s.id===id) : null);
+  const spell = SPELLS.find(s=>s.id===id) || ITEM_SLOTS.find(s=>s.id===id) || (id?.startsWith('item_')?{id,name:id,itemName:id}:null);
   if (!spell) return;
   if (!last || !last.state.enabled || !last.state.voiceReady || activeCast?.timedOut) return;
   if(queue.length>=32)return;
@@ -389,12 +435,17 @@ function pump() {
       pumpTimer = setTimeout(pump, busyUntil - now);
       return;
     }
-    const { spell, phrase, at, prepareOnly } = queue[0];
+    const entry=queue[0];
+    const { spell, phrase, at, prepareOnly } = entry;
     if (now - at > QUEUE_TTL_MS) {
       queue.shift();
       log(`"${phrase}" -> пропущено: слишком долго ждало в очереди`);
       continue;
     }
+    const profile=normalizeProfile(last?.state.timingProfile || config.timingProfile);
+    const selection=ensureSelection(entry,profile,pump);
+    if(selection.wait)return;
+    if(selection.refuse){queue.shift();cast(spell,phrase,selection,profile,prepareOnly);continue;}
     let p = plan(spell, prepareOnly);
     if (p.wait) {
       if (!gsiWaitUntil) gsiWaitUntil = now + GSI_WAIT_MS;
@@ -406,7 +457,7 @@ function pump() {
     }
     gsiWaitUntil = 0;
     queue.shift();
-    cast(spell, phrase, p, normalizeProfile(last?.state.timingProfile || config.timingProfile), prepareOnly);
+    cast(spell, phrase, p, profile, prepareOnly);
   }
 }
 
@@ -418,7 +469,7 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
   if (p.itemSlot) {
     const item=ITEM_SLOTS[p.itemSlot-1];
     if(!dispatchCast(item,p.action,profile))return cast(spell,phrase,{refuse:'Поток ввода недоступен'});
-    log('Предмет: '+item.name);
+    log('Предмет: '+(spell.itemName||gsi?.items?.[p.itemSlot-1]?.name||item.name)+' / '+item.name+' / '+(p.action===ACTION.SLOT1?'обычный каст':'Quickcast'));
     return broadcast({...last,event:'item',spell:item});
   }
   if (prepareOnly) {
@@ -458,6 +509,13 @@ function checkSlot() {
   if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled || !last.state.voiceReady) return;
   const { spell, phrase, from, timer, profile, prepareOnly } = awaitingSlot;
   if (gsi.at < from) return;
+  // When the unit was deselected during Invoke, restore selection before
+  // interpreting the slot list; an enemy packet may have no Invoker slots.
+  if(!prepareOnly&&(gsi.selected===false||awaitingSlot.selectionAt!==undefined||(lastClickAt!==null&&gsi.hero!=='npc_dota_hero_invoker'))){
+    const selection=ensureSelection(awaitingSlot,profile,checkSlot);
+    if(selection.wait)return;
+    if(selection.refuse){clearTimeout(timer);awaitingSlot=null;cast(spell,phrase,selection,profile);return pump();}
+  }
   if(gsi.hero!=='npc_dota_hero_invoker'||gsi.alive!==true||(!prepareOnly&&spell.needsScepter&&gsi.scepter===false)){
     clearTimeout(timer);awaitingSlot=null;
     cast(spell,phrase,{refuse:'Состояние героя изменилось после Invoke'});return pump();
@@ -465,6 +523,11 @@ function checkSlot() {
   const id = spell.base || spell.id;
   const slot = gsi.slots.indexOf(id);
   if (slot < 0) return;
+  if(!prepareOnly&&awaitingSlot.selectionAt===undefined){
+    const selection=ensureSelection(awaitingSlot,profile,checkSlot);
+    if(selection.wait)return;
+    if(selection.refuse){clearTimeout(timer);awaitingSlot=null;cast(spell,phrase,selection,profile);return pump();}
+  }
   clearTimeout(timer);
   awaitingSlot = null;
   if (prepareOnly) {
@@ -485,7 +548,9 @@ function checkSlot() {
 function slotTimeout() {
   if(!awaitingSlot)return;
   const { spell, phrase } = awaitingSlot;
-  awaitingSlot = null;
+  awaitingSlot = null;clearTimeout(selectionTimer);selectionTimer=null;predicted=null;
+  if(selectionStatus(Date.now())!==true)lastClickAt=Date.now();
+  log('Invoke не подтверждён:',gsi?`GSI ${Date.now()-gsi.at} мс; выделение ${gsi.selected??'неизвестно'}; Invoke cooldown ${gsi.abilities?.invoker_invoke?.cooldown??'неизвестно'}`:'нет GSI');
   cast(spell, phrase, { refuse: `${spell.name} не появилась в слоте` });
   pump();
 }
@@ -545,7 +610,7 @@ function settingsData() {
     phraseCatalog: allPhrases,
     customSpellPhrases: userConfig.customSpellPhrases||{},
     disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, mergeCatalog(allPhrases,userConfig.customSpellPhrases)),
-    itemPhrases: userConfig.itemPhrases||{},
+    itemPhrases: userConfig.itemPhrases||{},namedItemPhrases:userConfig.namedItemPhrases||{},
     dictionaryReady: !!modelWords,
     itemSlots: ITEM_SLOTS.map(({id,name,key})=>({id,name,key})),
     firstRun: !userConfig.keys,
@@ -566,7 +631,7 @@ function saveSettings(body) {
   for(const k of ['autoSyncBindings','syncQuickcast','bindingNotifications'])if(typeof body[k]==='boolean')out[k]=body[k];
   const keys = {};
   for (const n of KEY_NAMES) if (okKey(body.keys?.[n])) keys[n] = body.keys[n].toUpperCase();
-  for (const n of ITEM_KEYS) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
+  for (const n of [...ITEM_KEYS,'selectHero']) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
   out.keys = { ...config.keys, ...userConfig.keys, ...keys };
   if (okKey(body.voiceChatKey)) out.voiceChatKey = body.voiceChatKey.toUpperCase();
   validateKeys(out.keys,out.voiceChatKey||config.voiceChatKey);
@@ -581,9 +646,10 @@ function saveSettings(body) {
   if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v)));
   // Validate spell and item preferences together before writing anything.
   if(body.itemPhrases!==undefined)out.itemPhrases=body.itemPhrases;
+  if(body.namedItemPhrases!==undefined)out.namedItemPhrases=body.namedItemPhrases;
   const commands=resolveCommands(allPhrases,EXTRA_PHRASES,out,modelWords,modelInfo.active);
   out.customSpellPhrases=commands.customSpellPhrases;
-  out.itemPhrases=commands.itemPhrases;
+  out.itemPhrases=commands.itemPhrases;out.namedItemPhrases=commands.namedItemPhrases;
   out.disabledPhrases=commands.disabledPhrases;
   if(body.itemCastModes!==undefined)out.itemCastModes=validateItemCastModes(body.itemCastModes);
   saveJsonAtomic(CONFIG_FILE, out);
@@ -676,7 +742,7 @@ function onBindingRead(bindings){
     const differs=(a,b)=>Object.keys({...a,...b}).some(k=>a?.[k]!==b?.[k]);
     if((userConfig.keys&&differs({...config.keys,...userConfig.keys},config.keys))||(userConfig.voiceChatKey&&userConfig.voiceChatKey!==config.voiceChatKey)||(userConfig.slotCastModes&&differs(userConfig.slotCastModes,config.slotCastModes||{})))throw Error('Есть сохранённые настройки, ожидающие перезапуска.');
     const patch=bindingUpdate(bindings,config,userConfig.syncQuickcast!==false);
-    if(!bindingInFlight&&!differs(patch.keys,config.keys)&&patch.voiceChatKey===config.voiceChatKey&&!differs(patch.slotCastModes,config.slotCastModes||{})){bindingPending=null;bindingsChanged=false;return;}
+    if(!bindingInFlight&&!differs(patch.keys,config.keys)&&patch.voiceChatKey===config.voiceChatKey&&!differs(patch.slotCastModes,config.slotCastModes||{})&&!differs(patch.syncedItemCastModes??config.syncedItemCastModes,config.syncedItemCastModes||{})){bindingPending=null;bindingsChanged=false;return;}
     bindingPending=patch;queue.length=0;bindingsChanged=true;bindingNotice='Ожидается завершение текущего каста.';maybeApplyBindings();
   }catch(e){bindingPending=null;bindingAlert('Бинды не изменены: '+e.message);}
 }
@@ -691,7 +757,7 @@ async function watchBindings(force=false){
     if(file===watchedBindingFile&&bindingWatcher&&!bindingWatcher.closed){if(force)bindingWatcher.refresh();return;}
     bindingWatcher?.close();bindingWatcher=null;watchedBindingFile=file;lastBindingSignature=null;latestBindings=null;bindingPending=null;
     if(!file)return;
-    bindingWatcher=watchBindingFile(file,onBindingRead,e=>{latestBindings=null;lastBindingSignature=null;bindingPending=null;bindingAlert('Не удалось прочитать бинды Dota: '+e.message);});
+    bindingWatcher=watchBindingFile(file,onBindingRead,e=>{latestBindings=null;lastBindingSignature=null;bindingPending=null;bindingAlert('Не удалось прочитать бинды Dota: '+e.message+'. При включённой синхронизации неизвестный режим использует только клавишу');});
   }catch(e){bindingAlert('Наблюдение за биндами недоступно: '+e.message);}
   finally{checkingBindings=false;}
 }
@@ -711,12 +777,12 @@ async function diagnostics(force=false) {
     if(installed){const raw=fs.readFileSync(gsiPath,'utf8');cfgMatches=raw.includes('http://127.0.0.1:'+config.port+'/gsi')&&raw.includes('"'+config.authToken+'"');itemsConfigured=/"items"\s*"1"/.test(raw);}
   }catch{}
   const binds=watchedBindingFile?latestBindings:proc.bindings;
-  const required=['quas','wex','exort','invoke','slot1','slot2','voice'];
+  const required=['quas','wex','exort','invoke','slot1','slot2'];
   const bindingMatches=binds ? required.every(k=>!!binds.keys[k]) && Object.entries(binds.keys).every(([key,value])=>(key==='voice'?config.voiceChatKey:config.keys[key])===value) && Object.entries(binds.slotCastModes).every(([key,value])=>(config.slotCastModes?.[key]||(ITEM_KEYS.includes(key)?'quickcast':config.castMode))===value) : null;
-  const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
+  const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS,'selectHero'].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
   const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
   const abilities=gsi?Object.fromEntries(Object.values(gsi.abilities).filter(a=>gameName(a.name)).map(a=>[a.name,{level:Number.isFinite(a.level)?a.level:null,cooldown:Number.isFinite(a.cooldown)?a.cooldown:null,canCast:a.can_cast===true}])):null;
-  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingGeneration,bindingNotice,bindingsChanged,bindingWatching:!!bindingWatcher&&!bindingWatcher.closed,bindingsIssue:binds?null:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,slotCastModes:config.slotCastModes||{},bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
+  return {version:require('./package.json').releaseVersion,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingGeneration,bindingNotice,bindingsChanged,bindingWatching:!!bindingWatcher&&!bindingWatcher.closed,bindingsIssue:binds?null:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,slotCastModes:config.slotCastModes||{},bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,selected:gsi?.selected??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
 }
 let settingsWin = null;
 function openStartupDiagnostics(){
@@ -808,6 +874,12 @@ async function handleRequest(req,res){
     const q=(new URL(req.url,'http://localhost').searchParams.get('q')||'').trim().toLowerCase().slice(0,100);
     const matches=[];if(modelWords&&q.length>=2)for(const word of modelWords){if(word.startsWith(q))matches.push(word);if(matches.length>=30)break;}
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify({ready:!!modelWords,exact:!!modelWords?.has(q),matches}));
+  }
+  if (p === '/dictionary/check' && req.method === 'POST') {
+    const body=await readJson(req);
+    let result;
+    try{result=checkDictionary(modelWords,body.phrases);}catch(e){res.writeHead(400,{'Content-Type':'application/json'});return res.end(JSON.stringify({error:e.message}));}
+    res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify(result));
   }
   if (p === '/config' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
