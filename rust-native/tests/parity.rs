@@ -63,3 +63,27 @@ fn audio_blocks_and_conversion(){
     let mut blocks=Blocks::new(512).unwrap();for i in 0..511{assert!(blocks.push(i).is_none());}assert_eq!(blocks.push(511).unwrap().len(),512);
     assert!(Blocks::new(0).is_err());
 }
+
+#[test]
+fn read_only_vdf_import_and_conflicts(){
+    let text=r#""KeyBindings" { "Keys" {
+        "AbilityPrimary1" { "Key" "A" }
+        "AbilityPrimary2" { "Key" "W" }
+        "AbilityPrimary3" { "Key" "E" }
+        "AbilityUltimate" { "Key" "R" }
+        "AbilitySecondary1Quickcast" { "Key" "D" }
+        "AbilitySecondary2" { "Key" "F" "Mode" "0" }
+        "ChatVoiceTeam" { "Key" "T" }
+    } }"#;
+    let b=voice_invoker_native::bindings::read(text).unwrap();
+    let next=voice_invoker_native::bindings::apply(&Config::default(),&b).unwrap();
+    assert_eq!(next.keys["quas"],"A");assert_eq!(next.voice_chat_key,"T");assert_eq!(next.slot_cast_modes["slot1"],Mode::Quickcast);
+    let b=voice_invoker_native::bindings::read(&text.replace("\"T\"","\"A\"")).unwrap();
+    assert!(voice_invoker_native::bindings::apply(&Config::default(),&b).is_err());
+    assert!(voice_invoker_native::bindings::parse("\"A\" {").is_err());
+}
+#[test]
+fn gsi_slots_follow_numeric_order_not_hardcoded_indices(){
+    let p:Packet=serde_json::from_str(r#"{"hero":{"name":"npc_dota_hero_invoker","alive":true},"abilities":{"ability0":{"name":"invoker_quas"},"ability4":{"name":"invoker_invoke"},"ability10":{"name":"invoker_tornado"},"ability9":{"name":"invoker_empty1"}}}"#).unwrap();
+    assert_eq!(p.slots(),vec!["invoker_empty1","invoker_tornado"]);
+}

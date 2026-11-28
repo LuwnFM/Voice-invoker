@@ -16,7 +16,8 @@ impl Vosk{
     pub fn new(dll:&Path,model_path:&Path,rate:u32,grammar:&[String])->Result<Self,Box<dyn std::error::Error>>{
         if !(8000..=192000).contains(&rate){return Err("Unsupported sample rate".into());}
         let dll=dll.canonicalize()?;
-        let model_path=model_path.canonicalize()?;
+        let model_path=std::path::absolute(model_path)?;
+        if !model_path.is_dir(){return Err("Model directory missing".into());}
         // Vosk's path parameter is a C string; reject paths that cannot be represented.
         let path=CString::new(model_path.to_str().ok_or("Non-UTF8 model path")?)?;
         let grammar=CString::new(serde_json::to_string(grammar)?)?;

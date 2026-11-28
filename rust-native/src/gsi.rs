@@ -18,7 +18,12 @@ pub enum Plan{Cast(Action),Prepared,Wait,Refuse(&'static str)}
 impl Packet{
     pub fn authenticated(&self,c:&Config)->bool{self.auth.token==c.auth_token&&!c.auth_token.is_empty()}
     pub fn ability(&self,id:&str)->Option<&Ability>{self.abilities.values().find(|a|a.name==id)}
-    pub fn slots(&self)->Vec<&str>{["ability3","ability4"].iter().filter_map(|k|self.abilities.get(*k).map(|a|a.name.as_str())).collect()}
+    pub fn slots(&self)->Vec<&str>{
+        let mut entries:Vec<_>=self.abilities.iter().collect();
+        entries.sort_by_key(|(k,_)|k.strip_prefix("ability").and_then(|v|v.parse::<usize>().ok()).unwrap_or(usize::MAX));
+        let spell_ids=crate::catalog::spells();
+        entries.into_iter().map(|(_,a)|a.name.as_str()).filter(|name|name.starts_with("invoker_empty")||spell_ids.iter().any(|s|s.id==*name)).take(2).collect()
+    }
     pub fn plan(&self,s:&Spell,prepare:bool,fresh:bool)->Plan{
         if !fresh||self.hero.name.is_empty(){return Plan::Cast(if prepare{Action::Prepare}else{Action::Invoke});}
         if self.hero.name!="npc_dota_hero_invoker"||!self.hero.alive{return Plan::Refuse("Hero unavailable");}

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod bindings;
 pub mod catalog;
 pub mod config;
 pub mod input;
