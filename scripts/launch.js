@@ -33,6 +33,7 @@ function launchBackground(entry = root) {
   child.once('error', e => { console.error('Background launch failed:', e.message); process.exitCode = 1; });
   child.once('spawn', () => {
     console.log('Voice Invoker background supervisor PID ' + child.pid);
+    if(process.env.VI_LIFECYCLE_DIR&&process.env.VI_TEST_START_LAUNCHER==='1')fs.writeFileSync(path.join(process.env.VI_LIFECYCLE_DIR,'supervisor-pid'),String(child.pid));
     child.unref();
   });
 }

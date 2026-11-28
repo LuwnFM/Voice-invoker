@@ -48,11 +48,14 @@ async function ready(previous=0) {
   assert.deepEqual(pids(),[],'No pre-existing test Electron');
   const args=['-e','require("./scripts/launch").launchBackground(process.argv[1])',packaged?root:path.join(__dirname,'lifecycle-entry.js')];
   const start = () => {
-    const child=packaged&&process.env.VI_TEST_START_BAT==='1'
+    const marker=path.join(dir,'supervisor-pid');
+     fs.rmSync(marker,{force:true});
+     const gui=packaged&&process.env.VI_TEST_START_LAUNCHER==='1';
+     const child=gui?spawnSync(path.resolve(root,'..','..','VoiceInvoker-Launcher.exe'),['--no-dota'],{cwd:root,env:{...env,PATH:[path.join(process.env.SystemRoot||'C:\\Windows','System32'),path.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0'),process.env.SystemRoot||'C:\\Windows'].join(';')},encoding:'utf8',timeout:45000}):packaged&&process.env.VI_TEST_START_BAT==='1'
       ?spawnSync('cmd.exe',['/d','/c','start.bat'],{cwd:root,env:{...env,PATH:[path.join(process.env.SystemRoot||'C:\\Windows','System32'),path.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0'),process.env.SystemRoot||'C:\\Windows'].join(';')},encoding:'utf8',timeout:45000})
       :spawnSync(launcher,args,{cwd:root,env,encoding:'utf8',timeout:15000});
     assert.equal(child.status,0,child.stderr || String(child.error || ''));
-    const pid=Number(/supervisor PID (\d+)/.exec(String(child.stdout))?.[1]);
+    const pid=gui?Number(fs.readFileSync(marker,'utf8')):Number(/supervisor PID (\d+)/.exec(String(child.stdout))?.[1]);
     assert.ok(pid, child.stdout);
     return pid;
   };

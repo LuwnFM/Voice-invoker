@@ -114,11 +114,15 @@ if (Test-Path -LiteralPath $statePath) {
     $state = [pscustomobject]@{target=$target; hadOriginal=$hadOriginal; original=$original; installedHash=$newHash}
     Write-State $state
 }
-New-Item -ItemType Directory -Path $folder -Force | Out-Null
-[IO.File]::WriteAllBytes($target, $bytes)
-$state.installedHash = $newHash
-Write-State $state
-Write-Host "GSI installed: $target"
+if ((Test-Path -LiteralPath $target) -and (Hash-Bytes ([IO.File]::ReadAllBytes($target))) -eq $newHash -and $state.installedHash -eq $newHash) {
+    Write-Host "GSI already current: $target"
+} else {
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    [IO.File]::WriteAllBytes($target, $bytes)
+    $state.installedHash = $newHash
+    Write-State $state
+    Write-Host "GSI installed: $target"
+}
 if ($Launch) {
     if (Get-Process -Name dota2 -ErrorAction SilentlyContinue) {
         Write-Warning 'Dota is already running. Restart it with this launcher for GSI and borderless settings to apply.'

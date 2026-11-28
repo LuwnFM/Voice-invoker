@@ -11,12 +11,31 @@ function Run-Checked([string]$Exe,[string[]]$Arguments){
   Write-Host ('['+(Get-Date -Format o)+'] Running: '+[IO.Path]::GetFileName($Exe))
   $p=Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
   if(-not $p.WaitForExit(180000)){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue;throw "Timed out: $Exe"}
-  if($p.ExitCode -ne 0){throw "$Exe returned $($p.ExitCode)"}
+  if($p.ExitCode -ne 0){
+    foreach($name in @('installer.log','launcher-startup.log')){
+      $log=Join-Path $env:VI_DATA_DIR $name
+      if(Test-Path -LiteralPath $log){Get-Content -LiteralPath $log -Tail 30}
+    }
+    throw "$Exe returned $($p.ExitCode)"
+  }
 }
 try {
   New-Item -ItemType Directory -Path $root | Out-Null
   $installerPath=(Resolve-Path -LiteralPath $Installer).Path
+  # Begin with a recognizable older installation and no AppData, not only a fresh install.
+  New-Item -ItemType Directory -Path $app -Force | Out-Null
+  $config=Join-Path $app 'config.json'
+  $prefs='{"voiceChatKey":"MOUSE4","customSpellPhrases":{"invoker_tornado":["\u0443\u0440\u0430\u0433\u0430\u043d"]},"itemPhrases":{"item_slot_item1":["\u0449\u0438\u0442"]},"testOnly":true}'
+  [IO.File]::WriteAllText($config,$prefs)
+  [IO.File]::WriteAllText((Join-Path $app 'package.json'),'{"name":"voice-invoke","version":"1.1.1-a"}')
+  [IO.File]::WriteAllText((Join-Path $dest 'Start Voice Invoker.bat'),('@echo off'+"`n"+'call "%~dp0resources\app\start.bat"'))
+  [IO.File]::WriteAllText((Join-Path $app 'log.txt'),'first migration fixture')
   Run-Checked $installerPath @('/S',"/D=$dest")
+  $migrated=Join-Path $env:VI_DATA_DIR 'config.json'
+  if([IO.File]::ReadAllText($migrated) -ne $prefs){throw 'Installer did not migrate old settings before update'}
+  if(Test-Path -LiteralPath (Join-Path $dest 'Start Voice Invoker.bat')){throw 'Old launcher remained after upgrade'}
+  if(Test-Path -LiteralPath (Join-Path $app 'log.txt')){throw 'Old local log not cleaned'}
+  if(-not (Get-ChildItem -LiteralPath (Join-Path $env:VI_DATA_DIR 'legacy-backups') -Filter 'log-*.txt' | Where-Object { [IO.File]::ReadAllText($_.FullName) -eq 'first migration fixture' })){throw 'Old log backup missing'}
   if(-not (Test-Path -LiteralPath (Join-Path $dest 'VoiceInvoker.exe'))){throw 'EXE missing'}
   Write-Host 'Checking installed embedded runtime and model'
   $oldRunAsNode=$env:ELECTRON_RUN_AS_NODE
@@ -31,23 +50,31 @@ try {
   $shortcut=Join-Path ([Environment]::GetFolderPath('Programs')) 'Voice Invoker\Voice Invoker.lnk'
   if(-not (Test-Path -LiteralPath $shortcut)){throw 'Launch shortcut missing'}
   $link=(New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
-  if($link.TargetPath -ne (Join-Path $dest 'Start Voice Invoker.bat')){throw 'Wrong launch shortcut target'}
+  $launcher=Join-Path $dest 'VoiceInvoker-Launcher.exe'
+  if($link.TargetPath -ne $launcher){throw 'Wrong launch shortcut target'}
+  $desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) 'Voice Invoker.lnk'
+  if(-not (Test-Path -LiteralPath $desktop)){throw 'Desktop shortcut missing'}
+  if((New-Object -ComObject WScript.Shell).CreateShortcut($desktop).TargetPath -ne $launcher){throw 'Wrong desktop shortcut target'}
+  $runKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  if((Get-ItemProperty -LiteralPath $runKey -Name VoiceInvoker -ErrorAction SilentlyContinue).VoiceInvoker){throw 'Autostart must be off by default'}
   $pkgPath=Join-Path $app 'package.json'
   $originalPkg=[IO.File]::ReadAllText($pkgPath)
   try {
+    # Lifecycle checks use an isolated default config and restore the migrated fixture.
+    [IO.File]::WriteAllText($config,'{"voiceChatKey":"G","castMode":"click"}')
     $pkg=$originalPkg | ConvertFrom-Json
     $pkg.main='scripts/lifecycle-entry.js'
     [IO.File]::WriteAllText($pkgPath,($pkg | ConvertTo-Json -Depth 20))
     $env:VI_PACKAGED='1'
-    $env:VI_TEST_START_BAT='1'
+    $env:VI_TEST_START_LAUNCHER='1'
     & node (Join-Path $app 'scripts\lifecycle-check.js')
     if($LASTEXITCODE -ne 0){throw 'Installed launcher lifecycle test failed'}
   } finally {
     [IO.File]::WriteAllText($pkgPath,$originalPkg)
-    Remove-Item Env:VI_PACKAGED,Env:VI_TEST_START_BAT -ErrorAction SilentlyContinue
+    [IO.File]::WriteAllText($config,$prefs)
+    Remove-Item Env:VI_PACKAGED,Env:VI_TEST_START_LAUNCHER -ErrorAction SilentlyContinue
   }
   $config=Join-Path $app 'config.json'
-  $prefs='{"voiceChatKey":"MOUSE4","customSpellPhrases":{"invoker_tornado":["\u0443\u0440\u0430\u0433\u0430\u043d"]},"itemPhrases":{"item_slot_item1":["\u0449\u0438\u0442"]},"testOnly":true}'
   [IO.File]::WriteAllText($config,$prefs)
   & node -e "require(process.argv[1]).initializeUserData(process.argv[2])" (Join-Path $app 'user-data.js') $app
   if($LASTEXITCODE -ne 0){throw 'Preference migration failed'}
@@ -64,14 +91,48 @@ try {
   $state=Join-Path $app '.dota-install.json'
   if(-not (Test-Path -LiteralPath $state)){throw 'Backup missing'}
   $backup=[IO.File]::ReadAllText($state)
+  # Verify repeat GSI setup does not rewrite either the integration or its backup.
+  $oldTime=[DateTime]::UtcNow.AddDays(-2)
+  (Get-Item -LiteralPath $cfg).LastWriteTimeUtc=$oldTime
+  $cfgTime=(Get-Item -LiteralPath $cfg).LastWriteTimeUtc
+  $stateTime=(Get-Item -LiteralPath $state).LastWriteTimeUtc
+  Run-Checked 'powershell.exe' @('-NoProfile','-NonInteractive','-File',('"' + $setup + '"'),'-NoPrompt','-DotaPath',('"' + $dota + '"'))
+  if((Get-Item -LiteralPath $cfg).LastWriteTimeUtc -ne $cfgTime -or (Get-Item -LiteralPath $state).LastWriteTimeUtc -ne $stateTime){throw 'Unchanged GSI rewritten'}
+  # Simulate the obsolete launcher and an old local log from 1.1.1a.
+  $legacyBat=Join-Path $dest 'Start Voice Invoker.bat'
+  [IO.File]::WriteAllText($legacyBat,('@echo off'+"`n"+'call "%~dp0resources\app\start.bat"'))
+  $legacyLog=Join-Path $app 'log.txt'
+  [IO.File]::WriteAllText($legacyLog,'legacy log fixture')
+  $userFile=Join-Path $dest 'personal-notes.txt'
+  [IO.File]::WriteAllText($userFile,'keep')
+  (Get-Item -LiteralPath $model).LastWriteTimeUtc=$oldTime
+  (Get-Item -LiteralPath (Join-Path $dest 'VoiceInvoker.exe')).LastWriteTimeUtc=$oldTime
+  $modelTime=(Get-Item -LiteralPath $model).LastWriteTimeUtc
+  $exeTime=(Get-Item -LiteralPath (Join-Path $dest 'VoiceInvoker.exe')).LastWriteTimeUtc
+  Run-Checked $installerPath @('/S',"/D=$dest")
+  if((Get-Item -LiteralPath $model).LastWriteTimeUtc -ne $modelTime){throw 'Valid V2 recopied'}
+  if((Get-Item -LiteralPath (Join-Path $dest 'VoiceInvoker.exe')).LastWriteTimeUtc -ne $exeTime){throw 'Valid runtime recopied'}
+  if(Test-Path -LiteralPath $legacyBat){throw 'Obsolete launcher not removed'}
+  if(Test-Path -LiteralPath $legacyLog){throw 'Legacy log not archived'}
+  if(-not (Get-ChildItem -LiteralPath (Join-Path $env:VI_DATA_DIR 'legacy-backups') -Filter 'log-*.txt' | Where-Object { [IO.File]::ReadAllText($_.FullName) -eq 'legacy log fixture' })){throw 'Legacy log backup missing'}
+  if([IO.File]::ReadAllText($userFile) -ne 'keep'){throw 'Unrelated user file changed'}
+  # Preserve an explicitly enabled autostart across silent maintenance.
+  New-Item -Path $runKey -Force | Out-Null
+  $autoValue='"'+$launcher+'" --no-dota'
+  Set-ItemProperty -LiteralPath $runKey -Name VoiceInvoker -Value $autoValue
   [IO.File]::WriteAllText($model,'damaged V2 fixture')
   Run-Checked $installerPath @('/S',"/D=$dest")
+  if((Get-ItemProperty -LiteralPath $runKey -Name VoiceInvoker).VoiceInvoker -ne $autoValue){throw 'Upgrade lost selected autostart'}
   if([IO.File]::ReadAllText($config) -ne $prefs){throw 'Upgrade lost legacy preferences'}
   if([IO.File]::ReadAllText($migrated) -ne $newPrefs){throw 'Upgrade lost AppData preferences'}
   if([IO.File]::ReadAllText($state) -ne $backup){throw 'Upgrade lost GSI backup'}
   if((Get-FileHash -LiteralPath $model).Hash -ne $manifest.sha256){throw 'Upgrade changed model'}
   Run-Checked (Join-Path $dest 'Uninstall.exe') @('/S',"_?=$dest")
   if(Test-Path -LiteralPath (Join-Path $dest 'VoiceInvoker.exe')){throw 'Uninstall left executable'}
+  if((Get-ItemProperty -LiteralPath $runKey -Name VoiceInvoker -ErrorAction SilentlyContinue).VoiceInvoker){throw 'Uninstall left autostart'}
+  if(Test-Path -LiteralPath $desktop){throw 'Uninstall left desktop shortcut'}
+  if(Test-Path -LiteralPath $launcher){throw 'Uninstall left GUI launcher'}
+  if([IO.File]::ReadAllText($userFile) -ne 'keep'){throw 'Uninstall removed unrelated file'}
   if((Get-FileHash -LiteralPath $cfg).Hash -ne $before){throw 'GSI original not restored'}
   if([IO.File]::ReadAllText($config) -ne $prefs){throw 'Uninstall lost legacy preferences'}
   if([IO.File]::ReadAllText($migrated) -ne $newPrefs){throw 'Uninstall lost AppData preferences'}

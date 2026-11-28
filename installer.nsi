@@ -3,9 +3,11 @@
 !include "x64.nsh"
 !include "WinVer.nsh"
 !include "MUI2.nsh"
-Name "Voice Invoker ${VERSION}"
+!include "Sections.nsh"
+Name "Voice Invoker Installer ${VERSION}"
 OutFile "${OUTFILE}"
 InstallDir "$LOCALAPPDATA\VoiceInvoker"
+InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "InstallLocation"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 !define MUI_ICON "${ICONFILE}"
@@ -13,12 +15,73 @@ SetCompressor /SOLID lzma
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Запустить Voice Invoker и Dota 2"
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchVoiceInvoker
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "Russian"
+Function LaunchVoiceInvoker
+  SetOutPath "$INSTDIR"
+  ExecShell "open" "$INSTDIR\VoiceInvoker-Launcher.exe"
+FunctionEnd
+!macro RequireClosed
+  nsExec::ExecToStack /TIMEOUT=15000 'powershell.exe -NoProfile -NonInteractive -Command "if (Get-Process -Name VoiceInvoker,VoiceInvoker-Launcher -ErrorAction SilentlyContinue) { exit 1 }"'
+  Pop $0
+  Pop $1
+  ${If} $0 != "0"
+    MessageBox MB_ICONEXCLAMATION "Закрой Voice Invoker через системный трей перед продолжением." /SD IDOK
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+!macroend
+!macro Maintenance MODE
+  nsExec::ExecToStack /TIMEOUT=180000 '"$PLUGINSDIR\VoiceInvoker-Launcher.exe" --${MODE} "$INSTDIR" "$PLUGINSDIR"'
+  Pop $0
+  Pop $1
+  ${If} $0 != "0"
+    MessageBox MB_ICONSTOP "Не удалось выполнить проверку установки. Подробности: %APPDATA%\VoiceInvoker\installer.log. Пользовательские настройки не удалены." /SD IDOK
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+!macroend
+Section "Voice Invoker (обязательно)" SecMain
+  SectionIn RO
+  !insertmacro RequireClosed
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "${STAGE}\VoiceInvoker-Launcher.exe"
+  File "${PACKAGEMANIFEST}"
+  !insertmacro Maintenance prepare
+  SetOverwrite on
+  !include "${COPYFILES}"
+  SetOverwrite off
+  SetOutPath "$INSTDIR\resources\app"
+  File "${STAGE}\resources\app\config.json"
+  SetOverwrite on
+  !insertmacro Maintenance finalize
+  SetOutPath "$INSTDIR"
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\Voice Invoker"
+  CreateShortcut "$SMPROGRAMS\Voice Invoker\Voice Invoker.lnk" "$INSTDIR\VoiceInvoker-Launcher.exe" "" "$INSTDIR\VoiceInvoker-Launcher.exe"
+  CreateShortcut "$DESKTOP\Voice Invoker.lnk" "$INSTDIR\VoiceInvoker-Launcher.exe" "" "$INSTDIR\VoiceInvoker-Launcher.exe"
+  CreateShortcut "$SMPROGRAMS\Voice Invoker\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "DisplayName" "Voice Invoker"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "DisplayIcon" "$INSTDIR\VoiceInvoker-Launcher.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+SectionEnd
+Section /o "Автозапуск Voice Invoker с Windows (без запуска Dota)" SecAuto
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "VoiceInvoker" '"$INSTDIR\VoiceInvoker-Launcher.exe" --no-dota'
+SectionEnd
+Section "-Autostart cleanup"
+  ${IfNot} ${SectionIsSelected} ${SecAuto}
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "VoiceInvoker"
+  ${EndIf}
+SectionEnd
 Function .onInit
+  SetShellVarContext current
   ${IfNot} ${RunningX64}
     MessageBox MB_ICONSTOP "Voice Invoker requires Windows x64."
     SetErrorLevel 1
@@ -29,45 +92,34 @@ Function .onInit
     SetErrorLevel 1
     Abort
   ${EndIf}
-FunctionEnd
-Function LaunchVoiceInvoker
-  SetOutPath "$INSTDIR"
-  ExecShell "open" "$INSTDIR\Start Voice Invoker.bat"
-FunctionEnd
-!macro RequireClosed
-  nsExec::ExecToStack /TIMEOUT=15000 'powershell.exe -NoProfile -NonInteractive -Command "if (Get-Process -Name VoiceInvoker -ErrorAction SilentlyContinue) { exit 1 }"'
-  Pop $0
-  Pop $1
-  ${If} $0 != "0"
-    MessageBox MB_ICONEXCLAMATION "Close Voice Invoker from the system tray before continuing." /SD IDOK
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "VoiceInvoker"
+  ${If} $0 != ""
+    !insertmacro SelectSection ${SecAuto}
+  ${EndIf}
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "InstallLocation"
+  ${If} $0 != ""
+  ${AndIf} $0 != $INSTDIR
+    IfFileExists "$0\resources\app\package.json" 0 noOldInstall
+    MessageBox MB_ICONSTOP "Найдена другая зарегистрированная установка Voice Invoker. Обновляй её в исходной папке, чтобы сохранить резервную копию GSI." /SD IDOK
     SetErrorLevel 1
     Abort
   ${EndIf}
-!macroend
-Section "Install"
-  !insertmacro RequireClosed
-  SetOutPath "$INSTDIR"
-  SetOverwrite on
-  File /r /x config.json /x model "${STAGE}\*"
-  SetOverwrite off
-  SetOutPath "$INSTDIR\resources\app"
-  File "${STAGE}\resources\app\config.json"
-  ; Restore the verified original V2 archive, including a damaged local copy.
-  SetOverwrite on
-  SetOutPath "$INSTDIR\resources\app\model"
-  File "${STAGE}\resources\app\model\vosk-model-small-ru-invoker.tar.gz"
-  SetOverwrite on
-  SetOutPath "$INSTDIR"
-  WriteUninstaller "$INSTDIR\Uninstall.exe"
-  CreateDirectory "$SMPROGRAMS\Voice Invoker"
-  CreateShortcut "$SMPROGRAMS\Voice Invoker\Voice Invoker.lnk" "$INSTDIR\Start Voice Invoker.bat" "" "$INSTDIR\VoiceInvoker.exe"
-  CreateShortcut "$SMPROGRAMS\Voice Invoker\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "DisplayName" "Voice Invoker"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "DisplayIcon" "$INSTDIR\VoiceInvoker.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-SectionEnd
+  noOldInstall:
+  IfSilent done
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker" "DisplayVersion"
+  ${If} $0 == "${VERSION}"
+    IfFileExists "$INSTDIR\VoiceInvoker-Launcher.exe" 0 done
+    MessageBox MB_YESNOCANCEL|MB_ICONQUESTION "Версия ${VERSION} уже установлена.$\r$\nДа — запустить приложение.$\r$\nНет — проверить и восстановить файлы или изменить автозапуск.$\r$\nОтмена — выйти." /SD IDCANCEL IDYES launch IDNO done
+    Quit
+    launch:
+      Call LaunchVoiceInvoker
+      Quit
+  ${EndIf}
+  done:
+FunctionEnd
+Function un.onInit
+  SetShellVarContext current
+FunctionEnd
 Section "Uninstall"
   !insertmacro RequireClosed
   IfFileExists "$INSTDIR\resources\app\.dota-install.json" 0 skipGsi
@@ -79,9 +131,12 @@ Section "Uninstall"
   ${EndIf}
   skipGsi:
   !include "${REMOVEFILES}"
+  Delete "$INSTDIR\install-manifest.json"
   Delete "$SMPROGRAMS\Voice Invoker\Voice Invoker.lnk"
   Delete "$SMPROGRAMS\Voice Invoker\Uninstall.lnk"
+  Delete "$DESKTOP\Voice Invoker.lnk"
   RMDir "$SMPROGRAMS\Voice Invoker"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "VoiceInvoker"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VoiceInvoker"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
