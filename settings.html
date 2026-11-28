@@ -590,7 +590,7 @@
   fetch('/config').then((r) => r.json()).then((c) => {
     state.keys = { ...c.keys };
     state.slotModes=c.slotCastModes||{};buildItemPhrases(c);
-    for(const [name,phrases] of Object.entries(c.namedItemPhrases||{}))addNamedItem(name,phrases);
+    for(const [name,phrases] of Object.entries(c.namedItemPhrases||{}))addNamedItem(name,Array.isArray(phrases)?phrases:[]);
     for(const [name,mode] of Object.entries(c.itemCastModes||{}))addItemMode(name,String(mode));
     state.voice = String(c.voiceChatKey || '').toUpperCase();
     for (const k of Object.keys(state.keys)) state.keys[k] = String(state.keys[k]).toUpperCase();

@@ -4,7 +4,8 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $out = Join-Path $root 'build-output'
 $stage = Join-Path $out 'VoiceInvoker'
 $app = Join-Path $stage 'resources\app'
-$version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+$package = Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
+$version = if ($package.releaseVersion) { $package.releaseVersion } else { $package.version }
 $model = Join-Path $root 'model\vosk-model-small-ru-invoker.tar.gz'
 $manifest = Get-Content (Join-Path $root 'model-manifest.json') -Raw | ConvertFrom-Json
 if ((Get-FileHash -LiteralPath $model -Algorithm SHA256).Hash -ne $manifest.sha256) { throw 'Invalid V2 archive' }

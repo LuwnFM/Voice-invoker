@@ -202,3 +202,11 @@ test('deselection during Invoke with empty slot data recovers before reading slo
  h.advance(100);h.ctx.gsi={...h.ctx.gsi,at:1150,selected:true,slots:[SPELLS[0].id]};
  h.api.checkSlot();assert.equal(h.requests[2].action,ACTION.SLOT1);
 });
+
+test('named item resolves its current slot at execution, including a moved Atos',()=>{
+ const h=harness(true,true);h.ctx.phraseToSpell.c='item_rod_of_atos';h.ctx.config.keys={item1:'X',item2:'Y'};
+ h.ctx.gsi.items=[{name:'item_rod_of_atos',cooldown:0,can_cast:true},null];
+ h.api.castByPhrase('c');assert.equal(h.requests[0].spell,SPELLS.length+1);h.ack(h.requests[0]);
+ h.advance(2600);h.ctx.gsi.at=3600;h.ctx.gsi.items=[null,{name:'item_rod_of_atos',cooldown:0,can_cast:true}];h.api.castByPhrase('c');
+ assert.equal(h.requests[1].spell,SPELLS.length+2);assert.equal(h.requests[1].action,ACTION.SLOT2);
+});
