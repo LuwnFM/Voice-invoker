@@ -44,6 +44,9 @@ function vkOf(key) {
   return NAMED_KEYS[k] || 0;
 }
 
+// Unknown mode under automatic Quickcast sync: do not guess an extra click.
+function effectiveSlotMode(config,key){return config.slotCastModes?.[key]||(config.autoSyncBindings!==false&&config.syncQuickcast===true?'quickcast':config.castMode);}
+
 function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () => {} }) {
   const orbKey = { Q: config.keys.quas, W: config.keys.wex, E: config.keys.exort };
   let talkVk = vkOf(config.voiceChatKey);
@@ -169,7 +172,7 @@ function createVoiceCast(config, { isGameActive, emit, quit, openSettings = () =
       key(slot, timing.altDelayMs);
       steps.push({ type: 'up', vk: VK_ALT[1], wait: timing.altDelayMs });
     } else key(slot, wait);
-    const slotMode = config.slotCastModes?.[action === ACTION.SLOT2 ? 'slot2' : 'slot1'] || config.castMode;
+    const slotMode = effectiveSlotMode(config,action === ACTION.SLOT2 ? 'slot2' : 'slot1');
     if (slotMode === 'click' && spell.target) steps.push({ type: 'click', wait: timing.clickDelayMs });
 
     return steps;

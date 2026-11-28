@@ -2,7 +2,7 @@
 // separately. Never edit Steam, close the game or apply input.
 const {execFile}=require('node:child_process');
 const fs=require('node:fs'),path=require('node:path');
-const {parseVdf,readBindings}=require('./dota-bindings');
+const {parseVdf,readBindings,readVdfFile}=require('./dota-bindings');
 const flag=/ (?:-gamestateintegration)(?=\s|$)/i;
 const hasFlag=value=>flag.test(' '+String(value||'').trim());
 function chooseAccount(steam,active){
@@ -47,7 +47,7 @@ function inspectSteam(steam,active){
   let savedLaunchFlag=null;
   try{savedLaunchFlag=savedLaunchOptions(fs.readFileSync(path.join(root,'config','localconfig.vdf'),'utf8'));}catch{}
   try{
-   const bindings=readBindings(fs.readFileSync(bindingFile,'utf8'));
+   const bindings=readBindings(readVdfFile(bindingFile));
    return {savedLaunchFlag,bindings,bindingsIssue:null,bindingFile};
   }catch{return {savedLaunchFlag,bindings:null,bindingsIssue:'bindings-unreadable',bindingFile};}
  }catch{return {savedLaunchFlag:null,bindings:null,bindingsIssue:'account-unknown'};}
@@ -72,7 +72,7 @@ function processStatus(force=false){
 function bindingSignature(bindings){
  if(!bindings||!Object.keys(bindings.keys||{}).length)return null;
  const ordered=value=>Object.entries(value||{}).sort(([a],[b])=>a.localeCompare(b));
- return JSON.stringify([ordered(bindings.keys),ordered(bindings.slotCastModes),[...(bindings.warnings||[])].sort()]);
+ return JSON.stringify([ordered(bindings.keys),ordered(bindings.slotCastModes),ordered(bindings.itemCastModes),[...(bindings.warnings||[])].sort()]);
 }
 function supportReport(d){
  // Explicit allowlist. Never copy raw log lines, local paths, microphone labels,

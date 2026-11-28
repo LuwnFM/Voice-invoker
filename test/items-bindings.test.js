@@ -68,3 +68,18 @@ test('binding changes detect keys or cast modes, not property order',()=>{
  assert.notEqual(bindingSignature(a),bindingSignature({...a,keys:{quas:'A',wex:'W'}}));
  assert.equal(bindingSignature(null),null);
 });
+
+test('VDF supports literal backslash, comments and quoted braces',()=>{
+ const {parseVdf}=require('../dota-bindings');
+ const raw='"KeyBindings" { // comment\n "Keys" { "HeroSelect" { "Key" "F1" } "AbilitySecondary1" { "Key" "D" "Mode" "1" } "Unused" { "Key" "'+String.fromCharCode(92)+'" } "Other" "}" [$WIN32] } "Items" { "item_rod_of_atos" { "Mode" "1" } } }';
+ const data=readBindings(raw);assert.equal(data.keys.selectHero,'F1');assert.equal(data.slotCastModes.slot1,'quickcast');assert.equal(data.itemCastModes.item_rod_of_atos,'quickcast');
+ assert.equal(parseVdf(raw).keybindings.keys.unused.key,String.fromCharCode(92));assert.throws(()=>parseVdf('"KeyBindings" { "Keys"'));
+});
+test('named items follow inventory and refuse absent or stale data',()=>{
+ const item={name:'item_rod_of_atos',cooldown:0,can_cast:true},s={name:'Atos',itemName:item.name};
+ const c={keys:{item1:'X',item2:'Y'},slotCastModes:{item1:'quickcast',item2:'quickcast'},itemCastModes:{[item.name]:'click'},syncQuickcast:true,syncedItemCastModes:{[item.name]:'quickcast'}};
+ const g={at:100,hero:'npc_dota_hero_invoker',alive:true,items:[null,item]};
+ assert.deepEqual(planItem(s,g,c,false,101),{itemSlot:2,action:ACTION.SLOT2});
+ assert.equal(planItem(s,{...g,items:[item,null]},c,false,101).itemSlot,1);
+ assert.ok(planItem(s,{...g,items:[]},c,false,101).refuse);assert.ok(planItem(s,g,c,false,6000).refuse);
+});

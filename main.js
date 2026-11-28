@@ -23,7 +23,7 @@ const path = require('path');
 const { execFileSync, execFile } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
-const { ITEM_KEYS, ITEM_SLOTS, readInventory, planItem, validateItemCastModes } = require('./items');
+const { ITEM_KEYS, ITEM_SLOTS, readInventory, planItem, validateItemCastModes, namedItemTargets } = require('./items');
 const { readModelWords, checkDictionary } = require('./model-words');
 const { resolveCommands } = require('./custom-commands');
 const { importBindings } = require('./dota-bindings');
@@ -37,7 +37,7 @@ const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT, WM_APP_TOGGLE, WM_APP_BINDINGS } = require('./messages');
 
-/** @type {{port:number,authToken:string,keys:Record<string,string>,voiceChatKey:string,blockKeys:string[],listen:string,castMode:string,timingProfile:string,keyDelayMs:number,castDelayMs:number,slotWaitMs:number,clickDelayMs:number,altDelayMs:number,chainGapMs:number,microphone:string,windowTitle:string,phrases:Record<string,string[]>,acceptInjected:boolean,debugSteps:boolean,experimentalFrames?:boolean,testOnly?:boolean,disabledPhrases?:Record<string,string[]>,customSpellPhrases?:Record<string,string[]>,itemPhrases?:Record<string,string[]>,expandedVocabulary?:boolean,slotCastModes?:Record<string,string>,itemCastModes?:Record<string,string>}} */
+/** @type {{port:number,authToken:string,keys:Record<string,string>,voiceChatKey:string,blockKeys:string[],listen:string,castMode:string,timingProfile:string,keyDelayMs:number,castDelayMs:number,slotWaitMs:number,clickDelayMs:number,altDelayMs:number,chainGapMs:number,microphone:string,windowTitle:string,phrases:Record<string,string[]>,acceptInjected:boolean,debugSteps:boolean,experimentalFrames?:boolean,testOnly?:boolean,disabledPhrases?:Record<string,string[]>,customSpellPhrases?:Record<string,string[]>,itemPhrases?:Record<string,string[]>,expandedVocabulary?:boolean,slotCastModes?:Record<string,string>,itemCastModes?:Record<string,string>,namedItemPhrases?:Record<string,string[]>,syncedItemCastModes?:Record<string,string>,autoSyncBindings?:boolean,syncQuickcast?:boolean}} */
 const config = {
   port: 3055,
   // Должен совпадать с "token" в gamestate_integration_voice_invoke.cfg
@@ -55,6 +55,7 @@ const config = {
   //   "click"     — нажать клавишу и кликнуть левой кнопкой (обычный каст в Dota)
   //   "quickcast" — только клавиша (в Dota включён быстрый каст)
   castMode: 'click',
+  autoSyncBindings:true,syncQuickcast:true,
   // Паузы между нажатиями, мс
   timingProfile: 'normal',
   keyDelayMs: 35,
@@ -155,9 +156,9 @@ function configurePhrases(useExpanded) {
   config.phrases=commands.active;
   const isRussian = (phrase) => /[а-яё]/i.test(phrase);
   if(commands.errors.length)log('Пропущенные пользовательские фразы:',commands.errors.join('; '));
-  for (const s of [...SPELLS, ...ITEM_SLOTS]) {
+  for (const s of [...SPELLS, ...ITEM_SLOTS,...namedItemTargets(commands.namedItemPhrases)]) {
     for (const p of config.phrases[s.id] || []) {
-      if (isRussian(p) || 'itemSlot' in s || commands.customSpellPhrases[s.id]?.includes(p)) phraseToSpell[p.toLowerCase()] = s.id;
+      if (isRussian(p) || 'itemSlot' in s || 'itemName' in s || commands.customSpellPhrases[s.id]?.includes(p)) phraseToSpell[p.toLowerCase()] = s.id;
       else skipped.push(p);
     }
   }
@@ -260,7 +261,7 @@ function prediction() {
 
 // Решаем, что нажимать для способности: { action }, { refuse: причина } или { wait: true }
 function plan(spell, prepareOnly = false) {
-  if (spell.itemSlot) return planItem(spell,gsi,config,prepareOnly,Date.now());
+  if (spell.itemSlot||spell.itemName) return planItem(spell,gsi,config,prepareOnly,Date.now());
   const fresh = gsi && Date.now() - gsi.at < 5000 && gsi.hero;
   if (!fresh) {
     if (!gsiWarned) log('Нет данных от Dota (GSI) — кастую вслепую: сферы + Invoke + слот 1');
@@ -346,7 +347,7 @@ function dispatchCast(spell, action, profile) {
   if (activeCast) return false;
   castRequestId = castRequestId % MAX_CAST_ID + 1;
   const id = castRequestId;
-  if (!toHook(WM_APP_CAST, (spell.itemSlot ? SPELLS.length + spell.itemSlot : SPELLS.indexOf(spell) + 1), encodeCast(action, profile, id))) return false;
+  if (!toHook(WM_APP_CAST, (action===SELECT_HERO_ACTION?1:spell.itemSlot ? SPELLS.length + spell.itemSlot : SPELLS.indexOf(spell) + 1), encodeCast(action, profile, id))) return false;
   activeCast = { id, spell, action, profile, timedOut: false, watchdog: null };
   const timing = getTiming(config, profile);
   // Fail closed if the worker stops responding; do not send another series until it replies.
@@ -411,7 +412,7 @@ function discardWaiting() {
 function castByPhrase(command) {
   const { phrase, prepareOnly } = decodeVoiceCommand(command);
   const id=phraseToSpell[phrase];
-  const spell = SPELLS.find(s=>s.id===id) || (id?.startsWith('item_slot_') ? ITEM_SLOTS.find(s=>s.id===id) : null);
+  const spell = SPELLS.find(s=>s.id===id) || ITEM_SLOTS.find(s=>s.id===id) || (id?.startsWith('item_')?{id,name:id,itemName:id}:null);
   if (!spell) return;
   if (!last || !last.state.enabled || !last.state.voiceReady || activeCast?.timedOut) return;
   if(queue.length>=32)return;
@@ -468,7 +469,7 @@ function cast(spell, phrase, p, profile = normalizeProfile(config.timingProfile)
   if (p.itemSlot) {
     const item=ITEM_SLOTS[p.itemSlot-1];
     if(!dispatchCast(item,p.action,profile))return cast(spell,phrase,{refuse:'Поток ввода недоступен'});
-    log('Предмет: '+item.name);
+    log('Предмет: '+(spell.itemName||gsi?.items?.[p.itemSlot-1]?.name||item.name)+' / '+item.name+' / '+(p.action===ACTION.SLOT1?'обычный каст':'Quickcast'));
     return broadcast({...last,event:'item',spell:item});
   }
   if (prepareOnly) {
@@ -547,7 +548,9 @@ function checkSlot() {
 function slotTimeout() {
   if(!awaitingSlot)return;
   const { spell, phrase } = awaitingSlot;
-  awaitingSlot = null;
+  awaitingSlot = null;clearTimeout(selectionTimer);selectionTimer=null;predicted=null;
+  if(selectionStatus(Date.now())!==true)lastClickAt=Date.now();
+  log('Invoke не подтверждён:',gsi?`GSI ${Date.now()-gsi.at} мс; выделение ${gsi.selected??'неизвестно'}; Invoke cooldown ${gsi.abilities?.invoker_invoke?.cooldown??'неизвестно'}`:'нет GSI');
   cast(spell, phrase, { refuse: `${spell.name} не появилась в слоте` });
   pump();
 }
@@ -607,7 +610,7 @@ function settingsData() {
     phraseCatalog: allPhrases,
     customSpellPhrases: userConfig.customSpellPhrases||{},
     disabledPhrases: exclusions(userConfig.disabledPhrases||config.disabledPhrases, mergeCatalog(allPhrases,userConfig.customSpellPhrases)),
-    itemPhrases: userConfig.itemPhrases||{},
+    itemPhrases: userConfig.itemPhrases||{},namedItemPhrases:userConfig.namedItemPhrases||{},
     dictionaryReady: !!modelWords,
     itemSlots: ITEM_SLOTS.map(({id,name,key})=>({id,name,key})),
     firstRun: !userConfig.keys,
@@ -643,9 +646,10 @@ function saveSettings(body) {
   if (body.slotCastModes && typeof body.slotCastModes === 'object') out.slotCastModes = Object.fromEntries(Object.entries(body.slotCastModes).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v)));
   // Validate spell and item preferences together before writing anything.
   if(body.itemPhrases!==undefined)out.itemPhrases=body.itemPhrases;
+  if(body.namedItemPhrases!==undefined)out.namedItemPhrases=body.namedItemPhrases;
   const commands=resolveCommands(allPhrases,EXTRA_PHRASES,out,modelWords,modelInfo.active);
   out.customSpellPhrases=commands.customSpellPhrases;
-  out.itemPhrases=commands.itemPhrases;
+  out.itemPhrases=commands.itemPhrases;out.namedItemPhrases=commands.namedItemPhrases;
   out.disabledPhrases=commands.disabledPhrases;
   if(body.itemCastModes!==undefined)out.itemCastModes=validateItemCastModes(body.itemCastModes);
   saveJsonAtomic(CONFIG_FILE, out);
@@ -738,7 +742,7 @@ function onBindingRead(bindings){
     const differs=(a,b)=>Object.keys({...a,...b}).some(k=>a?.[k]!==b?.[k]);
     if((userConfig.keys&&differs({...config.keys,...userConfig.keys},config.keys))||(userConfig.voiceChatKey&&userConfig.voiceChatKey!==config.voiceChatKey)||(userConfig.slotCastModes&&differs(userConfig.slotCastModes,config.slotCastModes||{})))throw Error('Есть сохранённые настройки, ожидающие перезапуска.');
     const patch=bindingUpdate(bindings,config,userConfig.syncQuickcast!==false);
-    if(!bindingInFlight&&!differs(patch.keys,config.keys)&&patch.voiceChatKey===config.voiceChatKey&&!differs(patch.slotCastModes,config.slotCastModes||{})){bindingPending=null;bindingsChanged=false;return;}
+    if(!bindingInFlight&&!differs(patch.keys,config.keys)&&patch.voiceChatKey===config.voiceChatKey&&!differs(patch.slotCastModes,config.slotCastModes||{})&&!differs(patch.syncedItemCastModes??config.syncedItemCastModes,config.syncedItemCastModes||{})){bindingPending=null;bindingsChanged=false;return;}
     bindingPending=patch;queue.length=0;bindingsChanged=true;bindingNotice='Ожидается завершение текущего каста.';maybeApplyBindings();
   }catch(e){bindingPending=null;bindingAlert('Бинды не изменены: '+e.message);}
 }

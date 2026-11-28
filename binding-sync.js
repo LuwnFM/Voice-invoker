@@ -1,6 +1,6 @@
 // Watch the parent directory: Steam can atomically replace its bindings file.
 const fs=require('node:fs'),path=require('node:path');
-const {readBindings}=require('./dota-bindings');
+const {readBindings,readVdfFile}=require('./dota-bindings');
 const {validateKeys}=require('./key-validation');
 const {ITEM_KEYS}=require('./items');
 function bindingUpdate(bindings,config,syncModes=true){
@@ -12,13 +12,13 @@ function bindingUpdate(bindings,config,syncModes=true){
  validateKeys(keys,voiceChatKey);
  const slotCastModes={...config.slotCastModes};
  if(syncModes)for(const [k,v] of Object.entries(bindings.slotCastModes))slotCastModes[k]=v;
- return {keys,voiceChatKey,slotCastModes};
+ return {keys,voiceChatKey,slotCastModes,...(syncModes&&bindings.itemCastModes!==undefined?{syncedItemCastModes:bindings.itemCastModes}:{})};
 }
 function watchBindingFile(file,onRead,onError,delay=350){
  let timer=null,closed=false,watcher=null,attempts=0;
  function read(){
    if(closed)return;
-   try{const b=readBindings(fs.readFileSync(file,'utf8'));attempts=0;onRead(b);}
+   try{const b=readBindings(readVdfFile(file));attempts=0;onRead(b);}
    catch(e){if(++attempts<4)timer=setTimeout(read,delay);else{attempts=0;onError(e);}}
  }
  function change(){if(closed)return;clearTimeout(timer);attempts=0;timer=setTimeout(read,delay);}

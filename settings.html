@@ -118,7 +118,7 @@
 <div class="opts" style="margin-top: 10px">
   <label><input type="radio" name="castMode" value="click"> Обычный каст (клавиша + клик)</label>
   <label><input type="radio" name="castMode" value="quickcast"> Быстрый каст (только клавиша)</label>
-  <div class="sub">Режим должен совпадать с Dota: лишний клик после Quickcast может выделить врага. Для восстановления выбора назначь «Выбрать героя» (обычно F1) или считай клавиши Dota.</div>
+  <div class="sub">Режим должен совпадать с Dota: лишний клик после Quickcast может выделить врага. При включённой синхронизации неизвестный режим слота использует только клавишу. Для общего ручного обычного каста отключи синхронизацию Quickcast или назначь обычный режим конкретному слоту. Для восстановления выбора назначь «Выбрать героя» (обычно F1) или считай клавиши Dota.</div>
 </div>
 
 <div class="actions"><label>Слот 1 <select class="control" id="slot1Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label><label>Слот 2 <select class="control" id="slot2Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label></div>
@@ -151,8 +151,11 @@
 <h2>Фразы для слотов предметов</h2>
 <p class="hint">Введи любое слово или фразу из словаря модели, по одной на строку. Пустой список отключает голосовой слот. Фразы отключённых способностей можно использовать здесь; одинаковые активные команды не допускаются. Команда применяет предмет, который находится в этом слоте сейчас. Без свежего GSI предметы не применяются.</p>
 <div id="itemPhrases"></div>
+<h2>Фразы конкретных предметов</h2>
+<p class="hint">Предмет ищется по имени в текущем инвентаре, даже если его переложили. Например, item_rod_of_atos — «корни». Фразы слотов выше остаются независимыми. Нужна клавиша каждого используемого слота и свежий GSI.</p>
+<div id="namedItemPhrases" class="panel"></div><div class="actions"><button id="addNamedItem">Добавить фразы предмета</button></div>
 <h2>Индивидуальный режим каста предметов</h2>
-<p class="hint">Режим конкретного предмета имеет приоритет над режимом его текущего слота. Это не меняет бинды Dota. Выбирай только режим, соответствующий настройкам игры. Добавь предмет из GSI или введи его внутреннее имя (item_…). Голосовые команды назначаются выше, в разделе «Фразы для слотов предметов», а не здесь. Например: назначь слоту 2 фразу «корни» (если она есть в словаре), помести туда Rod of Atos и добавь здесь item_rod_of_atos с нужным режимом. При перестановке предмета его режим сохраняется, но фраза остаётся у прежнего слота. Без фразы слот не активируется голосом.</p>
+<p class="hint">Режим конкретного предмета имеет приоритет над режимом его текущего слота. Это не меняет бинды Dota. Выбирай только режим, соответствующий настройкам игры. Добавь предмет из GSI или введи его внутреннее имя (item_…). Голосовые команды назначаются выше: либо слоту, либо конкретному предмету. Здесь указывается только режим нажатия. Например: назначь слоту 2 фразу «корни» (если она есть в словаре), помести туда Rod of Atos и добавь здесь item_rod_of_atos с нужным режимом. При перестановке предмета его режим сохраняется, но фраза остаётся у прежнего слота. Без фразы слота или конкретного предмета голосовой команды нет. При успешной синхронизации режимы конкретных предметов из Dota учитываются автоматически.</p>
 <datalist id="knownItems"></datalist><div id="itemCastModes" class="panel"></div><div class="actions"><button id="addItemMode">Добавить предмет</button></div>
 <h2>Дополнительно</h2>
 <div class="opts"><label><input id="experimentalFrames" type="checkbox"> Экспериментально: frames-per-chunk=3 (выключено по умолчанию)</label>
@@ -511,6 +514,27 @@
     row.append(input,select,remove);$('#itemCastModes').append(row);
   }
   $('#addItemMode').onclick=()=>addItemMode();
+  function addNamedItem(name='',phrases=[]){
+    const block=document.createElement('div'),row=document.createElement('div'),input=document.createElement('input'),area=document.createElement('textarea'),remove=document.createElement('button'),feedback=document.createElement('div');
+    block.className='panel';row.className='row';input.className='control';input.style.flex='1';input.style.minWidth='0';input.placeholder='item_rod_of_atos';input.setAttribute('list','knownItems');input.dataset.namedItem='1';input.value=name;
+    remove.textContent='×';remove.title='Удалить фразы предмета';remove.onclick=()=>{block.remove();status('Есть несохранённые изменения');};
+    area.className='control';area.style.width='100%';area.rows=3;area.placeholder='Одна фраза на строку';area.value=phrases.join('\n');area.dataset.namedPhrase='1';
+    feedback.dataset.dictionary='named-item';bindDictionary(area,feedback,()=>{});
+    area.addEventListener('input',()=>status('Есть несохранённые изменения'));input.addEventListener('input',()=>status('Есть несохранённые изменения'));
+    row.append(input,remove);block.append(row,area,feedback);$('#namedItemPhrases').append(block);
+  }
+  $('#addNamedItem').onclick=()=>addNamedItem();
+  function collectNamedItems(){
+    const out={};
+    for(const block of $('#namedItemPhrases').children){
+      const name=(/** @type {HTMLInputElement} */(block.querySelector('[data-named-item]'))).value.trim().toLowerCase();
+      const phrases=(/** @type {HTMLTextAreaElement} */(block.querySelector('[data-named-phrase]'))).value.split(/\r?\n/).filter(p=>p.trim());
+      if(!name&&!phrases.length)continue;
+      if(!/^item_[a-z0-9_]{1,100}$/.test(name)||name.startsWith('item_slot_')||name==='item_empty')throw Error('Укажи внутреннее имя предмета item_…');
+      if(Object.hasOwn(out,name))throw Error('Предмет указан дважды: '+name);
+      out[name]=phrases;
+    }return out;
+  }
   function collectItemModes(){
     const out={};
     for(const row of $('#itemCastModes').children){
@@ -529,7 +553,7 @@
       experimentalFrames: $('#experimentalFrames').checked,
       testOnly: $('#testOnly').checked,
       slotCastModes: {slot1:$('#slot1Mode').value,slot2:$('#slot2Mode').value,...Object.fromEntries([.../** @type {NodeListOf<HTMLSelectElement>} */ (document.querySelectorAll('[data-item-mode]'))].map(e=>[e.dataset.itemMode,e.value]))},
-      itemCastModes: collectItemModes(),
+      itemCastModes: collectItemModes(),namedItemPhrases:collectNamedItems(),
       itemPhrases: Object.fromEntries([.../** @type {NodeListOf<HTMLTextAreaElement>} */ (document.querySelectorAll('[data-item-phrase]'))].map(e=>[e.dataset.itemPhrase,e.value.split(/\r?\n/).filter(p=>p.trim())])),
       voiceChatKey: state.voice,
       castMode: (/** @type {HTMLInputElement} */ (document.querySelector('input[name=castMode]:checked')))?.value,
@@ -566,6 +590,7 @@
   fetch('/config').then((r) => r.json()).then((c) => {
     state.keys = { ...c.keys };
     state.slotModes=c.slotCastModes||{};buildItemPhrases(c);
+    for(const [name,phrases] of Object.entries(c.namedItemPhrases||{}))addNamedItem(name,phrases);
     for(const [name,mode] of Object.entries(c.itemCastModes||{}))addItemMode(name,String(mode));
     state.voice = String(c.voiceChatKey || '').toUpperCase();
     for (const k of Object.keys(state.keys)) state.keys[k] = String(state.keys[k]).toUpperCase();

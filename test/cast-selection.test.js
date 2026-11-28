@@ -31,3 +31,11 @@ test('quickcast on a target never emits a mouse click; regular cast remains supp
  c.slotCastModes.item1='click';const regular=planItem(ITEM_SLOTS[0],gsi,c,false,101).action;
  assert.equal(v.buildSequence(ITEM_SLOTS[0],regular).at(-1).type,'click');
 });
+
+test('unknown ability slot never adds click while Quickcast sync is on',()=>{
+ const c={keys:{quas:'Q',wex:'W',exort:'E',invoke:'R',slot1:'D',slot2:'F'},castMode:'click',autoSyncBindings:true,syncQuickcast:true};
+ const v=createVoiceCast(c,{isGameActive:()=>true,emit(){},quit(){}});
+ for(const a of [ACTION.SLOT1,ACTION.SLOT2,ACTION.INVOKE])assert.ok(!v.buildSequence(spells[0],a).some(s=>s.type==='click'));
+ c.slotCastModes={slot1:'click'};assert.ok(v.buildSequence(spells[0],ACTION.SLOT1).some(s=>s.type==='click'));
+ c.slotCastModes={};c.syncQuickcast=false;assert.ok(v.buildSequence(spells[0],ACTION.SLOT1).some(s=>s.type==='click'));
+});

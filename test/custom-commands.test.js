@@ -46,3 +46,11 @@ test('deleting a custom alias removes it from the active grammar without removin
  const restored=resolveCommands(base,extra,{customSpellPhrases:{invoker_tornado:['буря']}},words,true);
  assert.deepEqual(restored.active.invoker_tornado,['торнадо','буря']);
 });
+
+test('named item phrases share conflict validation with slots and spells',()=>{
+ const pref={namedItemPhrases:{item_rod_of_atos:['щит']}};
+ assert.deepEqual(resolveCommands(base,extra,pref,words,true).active.item_rod_of_atos,['щит']);
+ assert.throws(()=>resolveCommands(base,extra,{...pref,itemPhrases:{item_slot_item1:['щит']}},words,true));
+ assert.throws(()=>resolveCommands(base,extra,{namedItemPhrases:{item_slot_item1:['щит']}},words,true));
+ assert.throws(()=>resolveCommands(base,extra,{namedItemPhrases:{item_rod_of_atos:['неизвестно']}},words,true));
+});
