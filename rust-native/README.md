@@ -1,4 +1,4 @@
-# Voice Invoker native 2.0 — alpha.1
+# Voice Invoker 1.1.2-Rust
 
 Экспериментальная Rust-ветка. JavaScript 1.1.1 остаётся в корне как эталон; main не меняется. Публикация релиза только после проверки реального микрофона и игры.
 
@@ -43,3 +43,5 @@ CI проверяет настоящий Vosk 0.3.45 с оригинальной
 Settings open in a separate WebView2 window (Wry/Tao); closing it releases that child process. If WebView2 is unavailable, the default browser is the fallback. No WebView is used for microphone, input, game overlay or recognition. Google Fonts requests removed for offline operation. Session capture uses deterministic software area-average conversion if the requested 16/48 kHz cannot be opened on the device; low-pass quality is basic, not a high-quality DSP resampler. The microphone CLI still reports the device rate. Overlay positioning uses the cursor or game monitor, including negative desktop coordinates. Physical tests remain necessary.
 
 Optional RNNoise (`nnnoiseless` Rust implementation) runs on a separate DSP worker with bounded queues; disabled by default until the real microphone test. The capture callback remains limited to PCM conversion and enqueueing. Audio initialization/disconnect failures switch to diagnostics-only mode with no hook/input, allowing settings changes and restart. Dry-run results appear in diagnostics. The loop avoids cloning unchanged GSI state and slows idle polling.
+
+Версия самостоятельного Rust-проекта — `1.1.2-Rust`, будущий тег `v1.1.2-Rust`, установщик `VoiceInvoker-Native-Setup-1.1.2-Rust.exe`. Публичный релиз пока не создан; CI-артефакты являются тестовыми сборками.

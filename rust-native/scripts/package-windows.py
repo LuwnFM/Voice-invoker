@@ -38,7 +38,7 @@ for path in stage.rglob("*"):
 for directory in sorted((p for p in stage.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
     lines.append('RMDir "$INSTDIR\\' + str(directory.relative_to(stage)).replace("$", "$$") + '"')
 remove.write_text("\n".join(lines)+"\n", encoding="utf-8")
-version = "2.0.0-alpha.1"
+version = "1.1.2-Rust"
 exe = out / f"VoiceInvoker-Native-Setup-{version}.exe"
 nsis = pathlib.Path(os.environ["ProgramFiles(x86)"]) / "NSIS/makensis.exe"
 if not nsis.is_file():
