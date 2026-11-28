@@ -60,6 +60,8 @@ try {
   $pkgPath=Join-Path $app 'package.json'
   $originalPkg=[IO.File]::ReadAllText($pkgPath)
   try {
+    # Lifecycle checks use an isolated default config and restore the migrated fixture.
+    [IO.File]::WriteAllText($config,'{"voiceChatKey":"G","castMode":"click"}')
     $pkg=$originalPkg | ConvertFrom-Json
     $pkg.main='scripts/lifecycle-entry.js'
     [IO.File]::WriteAllText($pkgPath,($pkg | ConvertTo-Json -Depth 20))
@@ -69,6 +71,7 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Installed launcher lifecycle test failed'}
   } finally {
     [IO.File]::WriteAllText($pkgPath,$originalPkg)
+    [IO.File]::WriteAllText($config,$prefs)
     Remove-Item Env:VI_PACKAGED,Env:VI_TEST_START_LAUNCHER -ErrorAction SilentlyContinue
   }
   $config=Join-Path $app 'config.json'
