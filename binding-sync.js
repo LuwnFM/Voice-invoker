@@ -5,13 +5,14 @@ const {validateKeys}=require('./key-validation');
 const {ITEM_KEYS}=require('./items');
 function bindingUpdate(bindings,config,syncModes=true){
  if(!bindings||bindings.warnings.length)throw Error('Неподдерживаемые бинды Dota; проверь ручной импорт.');
- if(!['quas','wex','exort','invoke','slot1','slot2','voice'].every(k=>bindings.keys[k]))throw Error('Не все основные клавиши найдены.');
+ if(!['quas','wex','exort','invoke','slot1','slot2'].every(k=>bindings.keys[k]))throw Error('Не все основные клавиши найдены.');
  if(ITEM_KEYS.some(k=>config.keys[k]&&!bindings.keys[k]))throw Error('Не найдена ранее назначенная клавиша предмета.');
  const {voice,...imported}=bindings.keys;
- const keys={...config.keys,...imported},voiceChatKey=voice;
+ // An unbound Dota voice chat must not silently enable always-listening.
+ const keys={...config.keys,...imported},voiceChatKey=voice||config.voiceChatKey;
  validateKeys(keys,voiceChatKey);
- const slotCastModes={...config.slotCastModes};
- if(syncModes)for(const [k,v] of Object.entries(bindings.slotCastModes))slotCastModes[k]=v;
+ // Replace the synchronized modes instead of retaining a previous account's modes.
+ const slotCastModes=syncModes?{...bindings.slotCastModes}:{...config.slotCastModes};
  return {keys,voiceChatKey,slotCastModes,...(syncModes&&bindings.itemCastModes!==undefined?{syncedItemCastModes:bindings.itemCastModes}:{})};
 }
 function watchBindingFile(file,onRead,onError,delay=350){
