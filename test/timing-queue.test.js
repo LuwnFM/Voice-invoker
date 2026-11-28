@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const SPELLS = require('../spells');
-const { ACTION, createVoiceCast, vkOf } = require('../logic');
+const { ACTION, createVoiceCast, vkOf, SELECT_HERO_ACTION } = require('../logic');
 const { decodeVoiceCommand } = require('../phrase-parser');
 const { NORMAL, getTiming, normalizeProfile, encodeCast, decodeCast, MAX_CAST_ID } = require('../timing-profiles');
 
@@ -17,7 +17,7 @@ function harness(withGsi = false, realPlan = false) {
   const requests=[], timers=new Map(), events=[];
   let timerId=0;
   const ctx=vm.createContext({
-    SPELLS, ACTION, decodeVoiceCommand, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
+    SPELLS, ACTION, SELECT_HERO_ACTION, vkOf, decodeVoiceCommand, getTiming, normalizeProfile, encodeCast, MAX_CAST_ID, WM_APP_CAST:0x8006,
     config:{...NORMAL,slotWaitMs:1500,timingProfile:'normal'},
     last:{state:{enabled:true,voiceReady:true,timingProfile:'normal'}},
     gsi:withGsi?{at:now,hero:'npc_dota_hero_invoker',alive:true,slots:[],abilities:{}}:null,
@@ -132,4 +132,32 @@ test('hold-to-talk release and re-press preserve a queued combo in every profile
   assert.equal(h.requests.length,1);h.ack(h.requests[0]);h.advance(100);h.api.pump();
   assert.equal(h.requests.length,2);assert.equal(h.requests[1].profile,profile);assert.equal(voice.state.listening,false);
  }
+});
+
+test('explicit lost selection restores hero once and waits for fresh confirmation',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};
+ h.ctx.gsi.selected=false;h.ctx.gsi.slots=[SPELLS[0].id];
+ h.api.castByPhrase('a');assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,SELECT_HERO_ACTION);
+ h.ack(h.requests[0]);h.advance(100);h.api.pump();assert.equal(h.requests.length,1);
+ h.ctx.gsi={...h.ctx.gsi,at:1100,selected:true};h.api.pump();
+ assert.equal(h.requests.length,2);assert.equal(h.requests[1].action,ACTION.SLOT1);
+});
+test('failed selection confirmation refuses instead of casting on another unit',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};h.ctx.gsi.selected=false;
+ h.api.castByPhrase('a');h.ack(h.requests[0]);h.advance(1100);h.api.pump();
+ assert.equal(h.requests.length,1);assert.equal(h.events.at(-1).event,'refuse');
+ const g=harness(true,true);g.ctx.gsi.selected=false;g.api.castByPhrase('a');assert.equal(g.requests.length,0);assert.equal(g.events.at(-1).event,'refuse');
+});
+test('after an actual click, missing selection field triggers one recovery before next cast',()=>{
+ const h=harness(false);h.ctx.config.keys={selectHero:'F1'};
+ h.api.castByPhrase('a');h.api.castByPhrase('b');
+ h.api.handleCastComplete({...h.requests[0],ok:true,clicked:true,elapsedMs:1});
+ h.advance(40);h.api.pump();assert.equal(h.requests[1].action,SELECT_HERO_ACTION);
+ h.ack(h.requests[1]);h.advance(60);h.api.pump();assert.equal(h.requests.length,3);assert.equal(h.requests[2].action,ACTION.INVOKE);
+});
+test('confirmed selected hero after a click does not generate extra selection',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};h.ctx.gsi.slots=[SPELLS[0].id,SPELLS[1].id];
+ h.api.castByPhrase('a');h.api.castByPhrase('b');h.api.handleCastComplete({...h.requests[0],ok:true,clicked:true,elapsedMs:1});
+ h.advance(40);h.ctx.gsi={...h.ctx.gsi,at:1040,selected:true};h.api.pump();
+ assert.equal(h.requests.length,2);assert.equal(h.requests[1].action,ACTION.SLOT2);
 });

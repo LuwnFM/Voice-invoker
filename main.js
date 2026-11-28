@@ -32,7 +32,7 @@ const {bindingUpdate,watchBindingFile,BUFFER_SIZE,writeBindingUpdate}=require('.
 const { allowedHost, allowedOrigin, jsonContentType, readJson } = require('./local-http');
 const { validateKeys } = require('./key-validation');
 const { saveJsonAtomic } = require('./config-storage');
-const { ACTION, vkOf } = require('./logic');
+const { ACTION, vkOf, SELECT_HERO_ACTION } = require('./logic');
 const { decodeVoiceCommand } = require('./phrase-parser');
 const { normalizeProfile, getTiming, encodeCast, MAX_CAST_ID, profileLabel } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_CAST, WM_APP_QUIT, WM_APP_TOGGLE, WM_APP_BINDINGS } = require('./messages');
@@ -238,6 +238,7 @@ function handleGsi(data) {
     at: Date.now(),
     hero: data.hero?.name || null,
     alive: data.hero?.alive === true,
+    selected: typeof data.hero?.selected_unit==='boolean'?data.hero.selected_unit:null,
     scepter: data.hero?.aghanims_scepter, // undefined, если игра не сообщает
     abilities,
     slots,
@@ -296,6 +297,39 @@ function plan(spell, prepareOnly = false) {
 // Способности, названные подряд, применяются одна за другой: следующая начинается, как только
 // поток хука закончит нажатия предыдущей.
 const queue = [];          // { spell, phrase, at }
+let lastClickAt=null,lastSelectAt=null,selectionTimer=null;
+// Selection packets are optional in GSI. Only use explicit booleans; never infer
+// selection from the hero name or treat missing data as a different hero.
+function selectionStatus(now){
+  return gsi&&now-gsi.at<5000&&gsi.hero==='npc_dota_hero_invoker'&&gsi.alive===true?gsi.selected:null;
+}
+function ensureSelection(entry,profile,resume){
+  const now=Date.now(),selected=selectionStatus(now);
+  clearTimeout(selectionTimer);selectionTimer=null;
+  const delay=ms=>{selectionTimer=setTimeout(resume,ms);return {wait:true};};
+  if(selected===true&&(lastClickAt===null||gsi.at>lastClickAt)){lastClickAt=null;}
+  if(entry.selectionAt!==undefined){
+    if(now<busyUntil)return delay(busyUntil-now);
+    if(selected===true&&gsi.at>entry.selectionAt){lastClickAt=null;return {};}
+    if(selected===false||entry.confirmSelection){
+      if(now<entry.selectionAt+1000)return delay(50);
+      return {refuse:'Инвокер не выбран после восстановления; выбери героя вручную'};
+    }
+    // Older clients omit selected_unit. One confirmed key dispatch, no retry loop.
+    lastClickAt=null;return {};
+  }
+  if(selected!==false&&lastClickAt===null)return {};
+  if(!vkOf(config.keys?.selectHero)){
+    if(selected===false)return {refuse:'Инвокер не выбран; назначь клавишу «Выбрать героя» в настройках'};
+    return {}; // legacy config without a verified selection key
+  }
+  // Avoid double-tapping the selection key (which can center the camera).
+  if(lastSelectAt!==null&&now-lastSelectAt<450)return delay(450-(now-lastSelectAt));
+  entry.selectionAt=now;entry.confirmSelection=selected===false;
+  if(!dispatchCast(entry.spell,SELECT_HERO_ACTION,profile))return {refuse:'Не удалось восстановить выбор Инвокера'};
+  lastSelectAt=now;
+  return {wait:true};
+}
 let busyUntil = 0;         // пауза после подтверждённой серии
 let activeCast = null;
 let castRequestId = 0;
@@ -324,8 +358,9 @@ function dispatchCast(spell, action, profile) {
 }
 
 function handleCastComplete(m) {
-  lastCastStatus=m.ok?'sent':'failed';
   if (!activeCast || m.id !== activeCast.id) return;
+  lastCastStatus=m.ok?'sent':'failed';
+  if(m.clicked===true)lastClickAt=Date.now();
   const finished = activeCast;
   clearTimeout(finished.watchdog);
   activeCast = null;
@@ -336,6 +371,12 @@ function handleCastComplete(m) {
     predicted = null;
     busyUntil = 0;
     return broadcast({ ...last, event: 'refuse', spell: finished.spell, reason: m.reason || 'Ошибка ввода' });
+  }
+  if(finished.action===SELECT_HERO_ACTION){
+    busyUntil=Date.now()+60;
+    log('Восстановление выбора Инвокера: клавиша отправлена');
+    if(awaitingSlot)checkSlot();else pump();
+    return;
   }
   if (finished.action === ACTION.PREPARE && awaitingSlot && last?.state.enabled) {
     if (awaitingSlot.prepareOnly && awaitingSlot.unconfirmed) {
@@ -356,6 +397,7 @@ function handleCastComplete(m) {
 
 function discardWaiting() {
   queue.length = 0;
+  clearTimeout(selectionTimer);selectionTimer=null;
   if (awaitingSlot) clearTimeout(awaitingSlot.timer);
   awaitingSlot = null;
   clearTimeout(pumpTimer);
@@ -389,12 +431,17 @@ function pump() {
       pumpTimer = setTimeout(pump, busyUntil - now);
       return;
     }
-    const { spell, phrase, at, prepareOnly } = queue[0];
+    const entry=queue[0];
+    const { spell, phrase, at, prepareOnly } = entry;
     if (now - at > QUEUE_TTL_MS) {
       queue.shift();
       log(`"${phrase}" -> пропущено: слишком долго ждало в очереди`);
       continue;
     }
+    const profile=normalizeProfile(last?.state.timingProfile || config.timingProfile);
+    const selection=ensureSelection(entry,profile,pump);
+    if(selection.wait)return;
+    if(selection.refuse){queue.shift();cast(spell,phrase,selection,profile,prepareOnly);continue;}
     let p = plan(spell, prepareOnly);
     if (p.wait) {
       if (!gsiWaitUntil) gsiWaitUntil = now + GSI_WAIT_MS;
@@ -406,7 +453,7 @@ function pump() {
     }
     gsiWaitUntil = 0;
     queue.shift();
-    cast(spell, phrase, p, normalizeProfile(last?.state.timingProfile || config.timingProfile), prepareOnly);
+    cast(spell, phrase, p, profile, prepareOnly);
   }
 }
 
@@ -465,6 +512,11 @@ function checkSlot() {
   const id = spell.base || spell.id;
   const slot = gsi.slots.indexOf(id);
   if (slot < 0) return;
+  if(!prepareOnly){
+    const selection=ensureSelection(awaitingSlot,profile,checkSlot);
+    if(selection.wait)return;
+    if(selection.refuse){clearTimeout(timer);awaitingSlot=null;cast(spell,phrase,selection,profile);return pump();}
+  }
   clearTimeout(timer);
   awaitingSlot = null;
   if (prepareOnly) {
@@ -566,7 +618,7 @@ function saveSettings(body) {
   for(const k of ['autoSyncBindings','syncQuickcast','bindingNotifications'])if(typeof body[k]==='boolean')out[k]=body[k];
   const keys = {};
   for (const n of KEY_NAMES) if (okKey(body.keys?.[n])) keys[n] = body.keys[n].toUpperCase();
-  for (const n of ITEM_KEYS) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
+  for (const n of [...ITEM_KEYS,'selectHero']) if (body.keys?.[n]===''||okKey(body.keys?.[n])) keys[n]=body.keys[n].toUpperCase();
   out.keys = { ...config.keys, ...userConfig.keys, ...keys };
   if (okKey(body.voiceChatKey)) out.voiceChatKey = body.voiceChatKey.toUpperCase();
   validateKeys(out.keys,out.voiceChatKey||config.voiceChatKey);
@@ -713,10 +765,10 @@ async function diagnostics(force=false) {
   const binds=watchedBindingFile?latestBindings:proc.bindings;
   const required=['quas','wex','exort','invoke','slot1','slot2','voice'];
   const bindingMatches=binds ? required.every(k=>!!binds.keys[k]) && Object.entries(binds.keys).every(([key,value])=>(key==='voice'?config.voiceChatKey:config.keys[key])===value) && Object.entries(binds.slotCastModes).every(([key,value])=>(config.slotCastModes?.[key]||(ITEM_KEYS.includes(key)?'quickcast':config.castMode))===value) : null;
-  const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
+  const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS,'selectHero'].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
   const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
   const abilities=gsi?Object.fromEntries(Object.values(gsi.abilities).filter(a=>gameName(a.name)).map(a=>[a.name,{level:Number.isFinite(a.level)?a.level:null,cooldown:Number.isFinite(a.cooldown)?a.cooldown:null,canCast:a.can_cast===true}])):null;
-  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingGeneration,bindingNotice,bindingsChanged,bindingWatching:!!bindingWatcher&&!bindingWatcher.closed,bindingsIssue:binds?null:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,slotCastModes:config.slotCastModes||{},bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
+  return {version:require('./package.json').version,electron:process.versions.electron,os:require('node:os').release(),dotaFound,running:proc.running,steamRunning:proc.steamRunning,launchFlag:proc.launchFlag,savedLaunchFlag:proc.savedLaunchFlag,bindingMatches,bindingGeneration,bindingNotice,bindingsChanged,bindingWatching:!!bindingWatcher&&!bindingWatcher.closed,bindingsIssue:binds?null:proc.bindingsIssue,bindingWarningsCount:binds?.warnings.length||0,gsiRejected:gsiRejectedAt!==null&&Date.now()-gsiRejectedAt<15000,local:{gsiPath,tracked,dataDir:DATA_DIR,steamFound:!!proc.steamPath,voiceMessage:voiceInfo.message,hookError,keys:config.keys,voiceChatKey:config.voiceChatKey,slotCastModes:config.slotCastModes||{},bindingWarnings:binds?.warnings||[]},itemsConfigured,gsiInstalled:installed,gsiConfigMatches:cfgMatches,gsiAgeMs:gsi?Date.now()-gsi.at:null,hero:gameName(gsi?.hero),alive:gsi?.alive??null,selected:gsi?.selected??null,slots:gsi?.slots.map(gameName)||null,abilities,items:gsi?.items?.map(x=>gameName(x?.name))||null,modelVerified:modelInfo.active,modelAvailable:fs.existsSync(RU_PATH),modelDictionaryReady:!!modelWords,configInvalid,configBackup,experimentalActive:!!experimental,voiceReady:voiceInfo.ready,voiceFailed:!voiceInfo.ready&&!!voiceInfo.message,hookReady:!!hookThreadId,hookFailed,enabled:!!last?.state.enabled,profile:last?.state.timingProfile||config.timingProfile,port:config.port,serverReady,testOnly,lastTest,activePhrases:Object.keys(phraseToSpell).length,repairFailed,setupFailedAtStartup,lastCastStatus,effectiveSettings};
 }
 let settingsWin = null;
 function openStartupDiagnostics(){

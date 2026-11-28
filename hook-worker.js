@@ -5,7 +5,7 @@
 const { parentPort, workerData } = require('worker_threads');
 const koffi = require('koffi');
 const SPELLS = [...require('./spells'), ...require('./items').ITEM_SLOTS];
-const { createVoiceCast } = require('./logic');
+const { createVoiceCast, createClickGuard } = require('./logic');
 const { decodeCast } = require('./timing-profiles');
 const { WM_APP_VOICE_READY, WM_APP_QUIT, WM_APP_CAST, WM_APP_TOGGLE, WM_APP_BINDINGS } = require('./messages');
 
@@ -66,6 +66,8 @@ const SendMouseInput = user32.func('SendInput', 'uint32', ['uint32', koffi.point
 
 const WH_KEYBOARD_LL = 13;
 const WH_MOUSE_LL = 14;
+const WM_LBUTTONDOWN = 0x201;
+const WM_RBUTTONDOWN = 0x204;
 const WM_MBUTTONDOWN = 0x207;
 const WM_MBUTTONUP = 0x208;
 const WM_XBUTTONDOWN = 0x20b;
@@ -145,6 +147,8 @@ let seqIdx = 0;
 let seqTimer = 0;
 let request = null;
 let altHeld = false;
+const clickGuard=createClickGuard();
+let clicked=false;
 
 function finishSequence(ok, reason = '') {
   if (seqTimer) { KillTimer(null, seqTimer); seqTimer = 0; }
@@ -152,13 +156,14 @@ function finishSequence(ok, reason = '') {
   const done = request;
   seq = null;
   request = null;
-  if (done) parentPort.postMessage({ type: 'cast-complete', id: done.id, ok, reason, profile: done.profile, elapsedMs: Number(process.hrtime.bigint() - done.started) / 1e6 });
+  if (done) parentPort.postMessage({ type: 'cast-complete', id: done.id, ok, reason, profile: done.profile, clicked, elapsedMs: Number(process.hrtime.bigint() - done.started) / 1e6 });
 }
 
 function runSequence() {
   while (seq && seqIdx < seq.length) {
     if (!voice.state.enabled || !voice.state.voiceReady) return finishSequence(false, 'Voice casting disabled or microphone unavailable');
     if (!isGameActive()) return finishSequence(false, 'Dota lost focus');
+    if (voice.state.chat) return finishSequence(false, 'Dota chat is open');
     const step = seq[seqIdx];
     if (step.wait > 0 && !step.waited) {
       step.waited = true;
@@ -168,7 +173,10 @@ function runSequence() {
     }
     if (config.debugSteps) parentPort.postMessage({ type: 'step', step: step.type === 'click' ? 'click' : step.vk, edge: step.type, elapsedMs: Number(process.hrtime.bigint() - request.started) / 1e6 });
     let count;
-    if (step.type === 'click') count = leftClick();
+    if (step.type === 'click') {
+      if(clickGuard.interrupted)return finishSequence(false,'Targeting superseded by manual mouse input');
+      count = leftClick();clicked=count>0;
+    }
     else if (step.type === 'down' || step.type === 'up') {
       count = keyEdge(step.vk, step.type === 'up');
       if (count === 1 && step.vk === 0xa4) altHeld = step.type === 'down';
@@ -180,19 +188,21 @@ function runSequence() {
       return finishSequence(false, 'SendInput failed');
     }
     seqIdx++;
+    if(seq[seqIdx]?.type==='click')clickGuard.arm();
   }
   finishSequence(true);
 }
 
 function startCast(spell, encoded) {
   const command = decodeCast(encoded);
-  if (!spell || !voice.state.enabled || !voice.state.voiceReady || !isGameActive() || seq) {
+  if (!spell || !voice.state.enabled || !voice.state.voiceReady || !isGameActive() || voice.state.chat || seq) {
     parentPort.postMessage({ type: 'cast-complete', id: command.id, ok: false, reason: 'Cast not accepted', profile: command.profile, elapsedMs: 0 });
     return;
   }
   request = { ...command, started: process.hrtime.bigint() };
   seq = voice.buildSequence(spell, command.action, command.profile);
   seqIdx = 0;
+  clicked=false;clickGuard.reset();
   runSequence();
 }
 
@@ -218,6 +228,10 @@ function proc(nCode, wParam, lParam) {
 function mouseProc(nCode, wParam, lParam) {
   try {
     const w = Number(wParam);
+    if(nCode===0&&(w===WM_LBUTTONDOWN||w===WM_RBUTTONDOWN)){
+      const m=koffi.decode(lParam,MSLLHOOKSTRUCT);
+      if(Number(m.dwExtraInfo)!==OWN_INPUT_TAG)clickGuard.manualClick();
+    }
     if (nCode === 0 && (w === WM_MBUTTONDOWN || w === WM_MBUTTONUP || w === WM_XBUTTONDOWN || w === WM_XBUTTONUP)) {
       const m = koffi.decode(lParam, MSLLHOOKSTRUCT);
       const own = Number(m.dwExtraInfo) === OWN_INPUT_TAG;

@@ -114,6 +114,7 @@
 <div class="opts" style="margin-top: 10px">
   <label><input type="radio" name="castMode" value="click"> Обычный каст (клавиша + клик)</label>
   <label><input type="radio" name="castMode" value="quickcast"> Быстрый каст (только клавиша)</label>
+  <div class="sub">Режим должен совпадать с Dota: лишний клик после Quickcast может выделить врага. Для восстановления выбора назначь «Выбрать героя» (обычно F1) или считай клавиши Dota.</div>
 </div>
 
 <div class="actions"><label>Слот 1 <select class="control" id="slot1Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label><label>Слот 2 <select class="control" id="slot2Mode"><option value="">Общий режим</option><option value="click">Обычный</option><option value="quickcast">Быстрый</option></select></label></div>
@@ -163,6 +164,7 @@
   const DOTA = [
     ['quas', 'Quas', 'сфера льда'], ['wex', 'Wex', 'сфера молний'], ['exort', 'Exort', 'сфера огня'],
     ['invoke', 'Invoke', ''], ['slot1', 'Слот 1', 'первая собранная способность'], ['slot2', 'Слот 2', 'вторая собранная способность'],
+    ['selectHero','Выбрать героя','Клавиша Dota для восстановления выбора своего Инвокера'],
     ['voice', 'Голосовой чат', 'зажимаешь — плагин слушает'],
     ...Array.from({length:6},(_,i)=>['item'+(i+1),'Предмет '+(i+1),'Необязательно']),
     ['neutral','Нейтральный предмет','Необязательно'],['teleport','Телепорт','Необязательно'],
@@ -226,6 +228,7 @@
         for(const [v,t] of [['quickcast','Только клавиша'],['click','Клавиша + клик']])select.add(new Option(t,v));select.value=state.slotModes?.[id]||'quickcast';
         const clear=document.createElement('button');clear.className='control';clear.textContent='×';clear.title='Очистить';clear.onclick=()=>setKey(id,'');row.append(select,clear);
       }
+      if(id==='selectHero'){const clear=document.createElement('button');clear.className='control';clear.textContent='×';clear.title='Очистить';clear.onclick=()=>setKey(id,'');row.append(clear);}
       dota.append(row);
     }
   }

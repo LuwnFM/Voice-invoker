@@ -20,13 +20,13 @@ function getTiming(config, profile = config.timingProfile) {
 }
 // 3 bits for action, 2 for profile; the request ID remains in signed 32-bit range.
 function encodeCast(action, profile, id) {
-  if (!Number.isInteger(id) || id < 1 || id > MAX_CAST_ID || ![1,2,3,4].includes(action)) throw new RangeError('Invalid cast request');
+  if (!Number.isInteger(id) || id < 1 || id > MAX_CAST_ID || ![1,2,3,4,5].includes(action)) throw new RangeError('Invalid cast request');
   return id * 32 + PROFILES.indexOf(normalizeProfile(profile)) * 8 + action;
 }
 function decodeCast(value) {
   const id = Math.floor(value / 32), action = value & 7;
   const profile = PROFILES[(value >>> 3) & 3];
-  if (!Number.isInteger(value) || id < 1 || id > MAX_CAST_ID || !profile || ![1,2,3,4].includes(action)) throw new RangeError('Invalid cast message');
+  if (!Number.isInteger(value) || id < 1 || id > MAX_CAST_ID || !profile || ![1,2,3,4,5].includes(action)) throw new RangeError('Invalid cast message');
   return { id, action, profile };
 }
 module.exports = { NORMAL, FAST, TURBO, PROFILES, MAX_CAST_ID, normalizeProfile, profileLabel, getTiming, encodeCast, decodeCast };
