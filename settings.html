@@ -75,6 +75,10 @@
   @media (max-width: 560px) { body { padding: 16px 16px 120px; } footer { flex-wrap: wrap; padding: 12px 16px; } #status { text-align: left; flex-basis: 100%; } }
   details { margin:8px 0; border:1px solid var(--edge); padding:10px; } summary{cursor:pointer;color:var(--gold);font-weight:bold} .phrase-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px;margin:12px 0} .phrase-list label{display:flex;align-items:flex-start;gap:7px} .phrase-list input{accent-color:var(--ready)} .actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0} .actions button,.control{background:#1d2a33;color:var(--text);border:1px solid var(--edge);padding:8px;cursor:pointer} .diag-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--edge)} .oktext{color:var(--ready)} .warntext{color:var(--gold)}
 
+  .dictionary-feedback{font-size:13px;line-height:1.55;margin:5px 0 9px;color:var(--muted);overflow-wrap:anywhere;user-select:text}
+  .dictionary-feedback.good{color:var(--ready)} .dictionary-feedback.bad{color:var(--bad)}
+  .dictionary-feedback.wait{color:var(--gold)} .dictionary-feedback button{margin:4px 5px 0 0;font-size:12px}
+  .control[aria-invalid="true"]{border-color:var(--bad)}
   #diagnostics{padding:0 14px;background:linear-gradient(180deg,#262a2e,#12171b)}
   .diag-row{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid #ffffff0b}
   .diag-row:last-child{border-bottom:0}
@@ -148,7 +152,7 @@
 <p class="hint">Введи любое слово или фразу из словаря модели, по одной на строку. Пустой список отключает голосовой слот. Фразы отключённых способностей можно использовать здесь; одинаковые активные команды не допускаются. Команда применяет предмет, который находится в этом слоте сейчас. Без свежего GSI предметы не применяются.</p>
 <div id="itemPhrases"></div>
 <h2>Индивидуальный режим каста предметов</h2>
-<p class="hint">Режим конкретного предмета имеет приоритет над режимом его текущего слота. Это не меняет бинды Dota. Выбирай только режим, соответствующий настройкам игры. Добавь предмет из GSI или введи его внутреннее имя (item_…). Голосовые команды по-прежнему относятся к слотам.</p>
+<p class="hint">Режим конкретного предмета имеет приоритет над режимом его текущего слота. Это не меняет бинды Dota. Выбирай только режим, соответствующий настройкам игры. Добавь предмет из GSI или введи его внутреннее имя (item_…). Голосовые команды назначаются выше, в разделе «Фразы для слотов предметов», а не здесь. Например: назначь слоту 2 фразу «корни» (если она есть в словаре), помести туда Rod of Atos и добавь здесь item_rod_of_atos с нужным режимом. При перестановке предмета его режим сохраняется, но фраза остаётся у прежнего слота. Без фразы слот не активируется голосом.</p>
 <datalist id="knownItems"></datalist><div id="itemCastModes" class="panel"></div><div class="actions"><button id="addItemMode">Добавить предмет</button></div>
 <h2>Дополнительно</h2>
 <div class="opts"><label><input id="experimentalFrames" type="checkbox"> Экспериментально: frames-per-chunk=3 (выключено по умолчанию)</label>
@@ -338,6 +342,57 @@
   }
 
   const spellNames={cold_snap:'Cold Snap',ghost_walk:'Ghost Walk',ice_wall:'Ice Wall',emp:'EMP',tornado:'Tornado',alacrity:'Alacrity',sun_strike:'Sun Strike',forge_spirit:'Forge Spirit',chaos_meteor:'Chaos Meteor',deafening_blast:'Deafening Blast',cataclysm:'Cataclysm'};
+  // Debounced per-field dictionary lookup. Ignore superseded responses.
+  function bindDictionary(input,feedback,onValid){
+    let timer=null,serial=0,validValue=null;
+    feedback.className='dictionary-feedback';feedback.setAttribute('role','status');
+    const render=(text,kind='')=>{feedback.className='dictionary-feedback '+kind;feedback.textContent=text;};
+    const check=async()=>{
+      const version=++serial,value=input.value,phrases=value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+      validValue=null;onValid(false);input.removeAttribute('aria-invalid');
+      if(!phrases.length){render('Введи фразу для проверки словаря.');return;}
+      if(phrases.length>100||phrases.some(p=>p.length>120||p.split(/\s+/).length>12)){
+        input.setAttribute('aria-invalid','true');render('Максимум 100 фраз, 120 символов и 12 слов в каждой.','bad');return;
+      }
+      render('Проверяю словарь модели…','wait');
+      try{
+        const response=await fetch('/dictionary/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phrases})});
+        if(!response.ok)throw Error('HTTP '+response.status);
+        const result=await response.json();
+        if(version!==serial||input.value!==value)return;
+        if(!result.ready){render('Словарь модели недоступен. Проверь диагностику.','wait');return;}
+        const missing=result.words.filter(w=>!w.available).map(w=>w.word);
+        const present=result.words.filter(w=>w.available).map(w=>w.word);
+        if(missing.length){
+          input.setAttribute('aria-invalid','true');
+          render('Нет в словаре: '+missing.join(', ')+(present.length?' · Есть: '+present.join(', '):''),'bad');
+          // Suggestions are exact dictionary entries with the same prefix,
+          // not automatic replacements or guessed synonyms.
+          for(const word of missing.slice(0,3)){
+            if(word.length<2)continue;
+            const q=word.slice(0,Math.min(3,word.length));
+            const res=await fetch('/dictionary?q='+encodeURIComponent(q));
+            if(!res.ok)continue;
+            const d=await res.json();
+            if(version!==serial||input.value!==value)return;
+            const candidates=(d.matches||[]).filter(w=>w!==word).slice(0,5);
+            if(candidates.length){
+              const line=document.createElement('div');line.textContent='«'+word+'»: ';
+              for(const candidate of candidates){
+                const button=document.createElement('button');button.type='button';button.className='control';button.textContent=candidate;
+                button.onclick=()=>{input.value=input.value.replace(/\S+/g,w=>w.toLowerCase()===word?candidate:w);input.dispatchEvent(new Event('input',{bubbles:true}));};line.append(button);
+              }
+              feedback.append(line);
+            }
+          }
+        }else{validValue=value;render('✓ Все слова есть в словаре: '+present.join(', '),'good');onValid(true);}
+      }catch(e){if(version===serial&&input.value===value)render('Не удалось проверить словарь: '+e.message,'wait');}
+    };
+    const schedule=()=>{clearTimeout(timer);serial++;validValue=null;onValid(false);input.removeAttribute('aria-invalid');render(input.value.trim()?'Проверяю словарь модели…':'Введи фразу для проверки словаря.',input.value.trim()?'wait':'');timer=setTimeout(check,220);};
+    input.addEventListener('input',schedule);
+    schedule();
+    return {valid:()=>validValue===input.value,reset:schedule};
+  }
   function buildPhrases(c) {
     const host=$('#phrases');host.replaceChildren();
     for(const [id,phrases] of Object.entries(c.phraseCatalog||{})) {
@@ -361,15 +416,17 @@
         const button=document.createElement('button');button.textContent=name;button.onclick=()=>{boxes.forEach(b=>b.checked=on);update();status('Есть несохранённые изменения');};actions.append(button);
       }
       const addRow=document.createElement('div'),input=document.createElement('input'),add=document.createElement('button');
-      addRow.className='actions';input.className='control';input.placeholder='Новая фраза';input.setAttribute('aria-label','Новая фраза: '+(spellNames[id.replace(/^invoker_/,'')]||id));input.maxLength=120;input.style.flex='1';add.textContent='Добавить фразу';add.disabled=!c.dictionaryReady;
+      addRow.className='actions';input.className='control';input.placeholder='Новая фраза';input.setAttribute('aria-label','Новая фраза: '+(spellNames[id.replace(/^invoker_/,'')]||id));input.maxLength=120;input.style.flex='1';add.textContent='Добавить фразу';add.disabled=true;
+      const feedback=document.createElement('div');feedback.dataset.dictionary='spell';
+      const dictionary=bindDictionary(input,feedback,ok=>{add.disabled=!ok;});
       const submit=()=>{
         const phrase=normalize(input.value);
-        if(!phrase)return;
+        if(!phrase||!dictionary.valid())return;
         if(boxes.some(b=>b.dataset.phrase===phrase)){status('Фраза уже есть в списке','bad');return;}
-        addPhrase(phrase,true);boxes.at(-1).checked=true;input.value='';update();status('Есть несохранённые изменения. Словарь проверяется при сохранении.');
+        addPhrase(phrase,true);boxes.at(-1).checked=true;input.value='';dictionary.reset();update();status('Есть несохранённые изменения.');
       };
       add.onclick=submit;input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();if(!add.disabled)submit();}};
-      addRow.append(input,add);update();details.append(summary,actions,list,addRow);host.append(details);
+      addRow.append(input,add);update();details.append(summary,actions,list,addRow,feedback);host.append(details);
     }
   }
   function selectedExclusions(){
@@ -428,7 +485,9 @@
       const details=document.createElement('details'),summary=document.createElement('summary'),area=document.createElement('textarea');
       area.className='control';area.style.width='100%';area.rows=4;area.dataset.itemPhrase=slot.id;area.placeholder='Одна фраза на строку';area.value=(c.itemPhrases?.[slot.id]||[]).join('\n');
       const update=()=>summary.textContent=slot.name+' — '+area.value.split(/\r?\n/).filter(x=>x.trim()).length+' фраз';
-      area.oninput=()=>{update();status('Есть несохранённые изменения');};update();details.append(summary,area);host.append(details);
+      const feedback=document.createElement('div');feedback.dataset.dictionary='item';
+      bindDictionary(area,feedback,()=>{});
+      area.oninput=()=>{update();status('Есть несохранённые изменения');};update();details.append(summary,area,feedback);host.append(details);
     }
     if(!c.dictionaryReady)$('#wordResults').textContent='Словарь не загружен: новые фразы нельзя проверить.';
   }
@@ -481,6 +540,7 @@
   }
 
   async function save() {
+    // Server revalidates the full proposed config, including duplicate commands.
     const res = await fetch('/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collect()),
     });

@@ -24,7 +24,7 @@ const { execFileSync, execFile } = require('child_process');
 const koffi = require('koffi');
 const SPELLS = require('./spells');
 const { ITEM_KEYS, ITEM_SLOTS, readInventory, planItem, validateItemCastModes } = require('./items');
-const { readModelWords } = require('./model-words');
+const { readModelWords, checkDictionary } = require('./model-words');
 const { resolveCommands } = require('./custom-commands');
 const { importBindings } = require('./dota-bindings');
 const { processStatus, supportReport, bindingSignature } = require('./diagnostics');
@@ -870,6 +870,12 @@ async function handleRequest(req,res){
     const q=(new URL(req.url,'http://localhost').searchParams.get('q')||'').trim().toLowerCase().slice(0,100);
     const matches=[];if(modelWords&&q.length>=2)for(const word of modelWords){if(word.startsWith(q))matches.push(word);if(matches.length>=30)break;}
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify({ready:!!modelWords,exact:!!modelWords?.has(q),matches}));
+  }
+  if (p === '/dictionary/check' && req.method === 'POST') {
+    const body=await readJson(req);
+    let result;
+    try{result=checkDictionary(modelWords,body.phrases);}catch(e){res.writeHead(400,{'Content-Type':'application/json'});return res.end(JSON.stringify({error:e.message}));}
+    res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify(result));
   }
   if (p === '/config' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });

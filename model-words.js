@@ -25,4 +25,12 @@ function readModelWords(archive){
  const graph=execFileSync(tar,['-xOf',archive,'vosk-model-small-ru-0.22/graph/Gr.fst'],{windowsHide:true,maxBuffer:64*1024*1024,timeout:60000});
  return wordsFromGraph(graph);
 }
-module.exports={wordsFromGraph,readModelWords};
+// Validate the exact tokens that the command validator will see. No model mutation.
+/** @param {Set<string>|null} words @param {string[]} phrases */
+function checkDictionary(words,phrases){
+ if(!Array.isArray(phrases)||phrases.length>100||phrases.some(p=>typeof p!=='string'||p.length>120))throw Error('Максимум 100 фраз по 120 символов');
+ const tokens=[...new Set(phrases.flatMap(p=>p.trim().toLowerCase().split(/\s+/).filter(Boolean)))];
+ if(tokens.length>1200)throw Error('Слишком много слов');
+ return {ready:!!words,words:tokens.map(word=>({word,available:words?words.has(word):null}))};
+}
+module.exports={wordsFromGraph,readModelWords,checkDictionary};
