@@ -777,7 +777,7 @@ async function diagnostics(force=false) {
     if(installed){const raw=fs.readFileSync(gsiPath,'utf8');cfgMatches=raw.includes('http://127.0.0.1:'+config.port+'/gsi')&&raw.includes('"'+config.authToken+'"');itemsConfigured=/"items"\s*"1"/.test(raw);}
   }catch{}
   const binds=watchedBindingFile?latestBindings:proc.bindings;
-  const required=['quas','wex','exort','invoke','slot1','slot2','voice'];
+  const required=['quas','wex','exort','invoke','slot1','slot2'];
   const bindingMatches=binds ? required.every(k=>!!binds.keys[k]) && Object.entries(binds.keys).every(([key,value])=>(key==='voice'?config.voiceChatKey:config.keys[key])===value) && Object.entries(binds.slotCastModes).every(([key,value])=>(config.slotCastModes?.[key]||(ITEM_KEYS.includes(key)?'quickcast':config.castMode))===value) : null;
   const effectiveSettings={castMode:config.castMode,listen:config.listen,keys:Object.fromEntries([...KEY_NAMES,...ITEM_KEYS,'selectHero'].filter(k=>okKey(config.keys[k])).map(k=>[k,config.keys[k]])),voiceChatKey:okKey(config.voiceChatKey)?config.voiceChatKey:null,slotCastModes:Object.fromEntries(Object.entries(config.slotCastModes||{}).filter(([k,v])=>['slot1','slot2',...ITEM_KEYS].includes(k)&&['click','quickcast'].includes(v))),microphone:config.microphone?'selected':'default',itemCastModes:Object.fromEntries(Object.entries(config.itemCastModes||{}).filter(([k,v])=>/^item_[a-z0-9_]{1,100}$/.test(k)&&['click','quickcast'].includes(v)))};
   const gameName=value=>typeof value==='string'&&/^[a-z0-9_]{1,100}$/i.test(value)?value:null;
