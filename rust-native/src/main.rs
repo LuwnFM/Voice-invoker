@@ -30,9 +30,16 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             if !tail.is_empty(){let (finalized,text)=engine.feed(&tail)?;print_result(&parser,&mut gate,&mut previous,finalized,&text);}
             let text=engine.finish()?;print_result(&parser,&mut gate,&mut previous,true,&text);
         },
+        Some("gsi-monitor") if (2..=3).contains(&args.len())=>{
+            let mut cfg=Config::default();cfg.port=args[1].parse()?;
+            let seconds=args.get(2).map(|s|s.parse()).transpose()?.unwrap_or(15);
+            voice_invoker_native::gsi_server::monitor(&cfg,seconds)?;
+        },
+        #[cfg(windows)]
+        Some("hook-smoke") if args.len()==1=>voice_invoker_native::win_input::smoke()?,
         #[cfg(windows)]
         Some("microphone") if (3..=6).contains(&args.len())=>microphone(&args)?,
-        _=>{println!("Native prototype — NO keyboard or mouse injection.\nverify-model ARCHIVE\nextract-model ARCHIVE NEW_DIR\nparse TEXT\nrecognize-wav DLL MODEL_DIR WAV [BLOCK=512] [CONFIG]\nmicrophone DLL MODEL_DIR [SECONDS=15] [BLOCK=512] [DEVICE_NAME]");}
+        _=>{println!("Native prototype — NO keyboard or mouse injection.\nverify-model ARCHIVE\nextract-model ARCHIVE NEW_DIR\nparse TEXT\ngsi-monitor PORT [SECONDS=15]\nhook-smoke (Windows, observe only)\nrecognize-wav DLL MODEL_DIR WAV [BLOCK=512] [CONFIG]\nmicrophone DLL MODEL_DIR [SECONDS=15] [BLOCK=512] [DEVICE_NAME]");}
     }
     Ok(())
 }

@@ -28,6 +28,11 @@ jobs:
       - run: cargo test --all-targets
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release
+      - name: Native Windows hook lifecycle (observe only)
+        if: runner.os == 'Windows'
+        run: .\target\release\voice-invoker-native.exe hook-smoke
+      - name: GSI loopback integration
+        run: python scripts/gsi-smoke.py
       - name: Native Vosk with verified V2 (16/48 kHz)
         run: python scripts/native-smoke.py
       - uses: actions/upload-artifact@v4
