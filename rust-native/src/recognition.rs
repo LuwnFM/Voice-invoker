@@ -10,7 +10,7 @@ pub struct Parser {
 impl Parser {
     pub fn new(catalog:&Catalog)->Self{
         let mut entries:Vec<_>=catalog.active.iter().map(|(p,t)|(p.clone(),p.split_whitespace().map(str::to_owned).collect::<Vec<_>>(),t.clone())).collect();
-        entries.sort_by(|a,b|b.1.len().cmp(&a.1.len()));
+        entries.sort_by_key(|a|std::cmp::Reverse(a.1.len()));
         Self{entries}
     }
     pub fn parse(&self,text:&str)->Vec<Command>{
