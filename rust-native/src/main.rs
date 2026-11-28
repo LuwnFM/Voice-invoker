@@ -1,5 +1,5 @@
 use std::{path::Path,io::Write};
-use voice_invoker_native::{catalog,config::Config,recognition::{Parser,Gate},model,vosk::Vosk,audio::Blocks};
+use voice_invoker_native::{catalog,config::Config,recognition::Parser,speech::SpeechSession,model,vosk::Vosk,audio::Blocks};
 fn main(){
     if let Err(e)=run(){eprintln!("Voice Invoker native: {e}");std::process::exit(1);}
 }
@@ -25,13 +25,13 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             if spec.channels!=1||spec.bits_per_sample!=16||spec.sample_format!=hound::SampleFormat::Int{return Err("Expected mono PCM16 WAV".into());}
             let block=args.get(4).map(|s|s.parse()).transpose()?.unwrap_or(512);
             let mut blocks=Blocks::new(block)?;let mut engine=Vosk::new(Path::new(&args[1]),path,spec.sample_rate,&parser.grammar())?;
-            let mut gate=Gate::default();let mut previous=String::new();let mut tail=Vec::new();
+            let mut session=SpeechSession::default();let mut previous=String::new();let mut tail=Vec::new();let mut samples=0u64;
             for sample in wav.samples::<i16>(){
-                let sample=sample?;tail.push(sample);
-                if let Some(pcm)=blocks.push(sample){tail.clear();let (finalized,text)=engine.feed(&pcm)?;print_result(&parser,&mut gate,&mut previous,finalized,&text);}
+                let sample=sample?;tail.push(sample);samples+=1;
+                if let Some(pcm)=blocks.push(sample){tail.clear();let (finalized,text)=engine.feed(&pcm)?;print_result(&parser,&mut session,&mut previous,samples.saturating_mul(1000)/u64::from(spec.sample_rate),finalized,&text);}
             }
-            if !tail.is_empty(){let (finalized,text)=engine.feed(&tail)?;print_result(&parser,&mut gate,&mut previous,finalized,&text);}
-            let text=engine.finish()?;print_result(&parser,&mut gate,&mut previous,true,&text);
+            if !tail.is_empty(){let (finalized,text)=engine.feed(&tail)?;print_result(&parser,&mut session,&mut previous,samples.saturating_mul(1000)/u64::from(spec.sample_rate),finalized,&text);}
+            let text=engine.finish()?;let now=samples.saturating_mul(1000)/u64::from(spec.sample_rate);print_result(&parser,&mut session,&mut previous,now,true,&text);let _=session.end(&parser,now);
         },
         Some("watch-binds") if (2..=3).contains(&args.len())=>{
             let seconds=args.get(2).map(|s|s.parse()).transpose()?.unwrap_or(15);
@@ -50,10 +50,10 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
     }
     Ok(())
 }
-fn print_result(parser:&Parser,gate:&mut Gate,previous:&mut String,finalized:bool,text:&str){
-    if finalized||text!=previous{println!("{}: {} => {:?}",if finalized{"final"}else{"partial"},text,gate.read(parser,text,finalized));let _=std::io::stdout().flush();}
-    previous.clear();previous.push_str(text);
-    if finalized{gate.reset();previous.clear();}
+fn print_result(parser:&Parser,session:&mut SpeechSession,previous:&mut String,now:u64,finalized:bool,text:&str){
+    let commands=session.observe(parser,now,text,finalized);
+    if finalized||text!=previous||!commands.is_empty(){println!("{}: {} => {:?}",if finalized{"final"}else{"partial"},text,commands);let _=std::io::stdout().flush();}
+    previous.clear();if !finalized{previous.push_str(text);}
 }
 #[cfg(windows)]
 fn microphone(args:&[String])->Result<(),Box<dyn std::error::Error>>{
@@ -94,11 +94,11 @@ fn microphone(args:&[String])->Result<(),Box<dyn std::error::Error>>{
         _=>return Err(format!("Unsupported microphone format: {format:?}").into()),
     };
     println!("Microphone: {} / {} Hz / {} channels / {} samples. Test only.",device.name()?,rate,channels,size);
-    stream.play()?;let start=Instant::now();let mut gate=Gate::default();let mut previous=String::new();
+    stream.play()?;let start=Instant::now();let mut session=SpeechSession::default();let mut previous=String::new();
     while start.elapsed()<Duration::from_secs(seconds){
         if failure.load(Ordering::Acquire){return Err("Capture failed or queue overflow".into());}
-        if let Ok(pcm)=rx.recv_timeout(Duration::from_millis(100)){let (finalized,text)=engine.feed(&pcm)?;print_result(&parser,&mut gate,&mut previous,finalized,&text);}
+        if let Ok(pcm)=rx.recv_timeout(Duration::from_millis(100)){let (finalized,text)=engine.feed(&pcm)?;print_result(&parser,&mut session,&mut previous,start.elapsed().as_millis() as u64,finalized,&text);}
     }
     drop(stream);if failure.load(Ordering::Acquire){return Err("Capture failed".into());}
-    let text=engine.finish()?;print_result(&parser,&mut gate,&mut previous,true,&text);Ok(())
+    let text=engine.finish()?;let now=start.elapsed().as_millis() as u64;print_result(&parser,&mut session,&mut previous,now,true,&text);let _=session.end(&parser,now);Ok(())
 }

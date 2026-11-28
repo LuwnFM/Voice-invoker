@@ -7,6 +7,7 @@ pub mod config;
 pub mod input;
 pub mod model;
 pub mod recognition;
+pub mod speech;
 pub mod gsi;
 pub mod gsi_server;
 #[cfg(windows)]
