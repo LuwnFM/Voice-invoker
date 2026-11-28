@@ -19,7 +19,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     let shell=crate::shell::Shell::start(ui.clone(),config.window_title.clone(),true,true)?;
     let arm=Arc::new(AtomicBool::new(false));
     let hook=Hook::start_session(config.clone(),live,arm.clone())?;
-    let mut always=config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
+    let mut always=!live||config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
 
     let mut runtime=Runtime::new(config.clone(),parser,capture.rate);
     let mut active:Option<Execution>=None;let mut last_packet=None;
@@ -68,7 +68,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
         if active.is_none()&&runtime.idle(){if let Some(next)=pending.take().filter(|_|ui.can_sync()){
             arm.store(false,Ordering::Release);hook.update(next.clone())?;runtime.replace_bindings(&next,now);vosk.reset();require_release=true;config=next;
             // During migration only the isolated native store is eligible for automatic writes.
-            always=config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
+            always=!live||config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
             if let Err(e)=ui.bindings(&config){eprintln!("Bindings active but not saved: {e}");}
             println!("Bindings updated without restart");
         }}

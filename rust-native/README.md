@@ -1,18 +1,24 @@
 # Voice Invoker native 2.0 — alpha.1
 
-Экспериментальный перенос с 1.1.1. Старое приложение остаётся в корне репозитория как проверяемый эталон. Эта ветка не публикует релизы и не посылает игровые нажатия.
+Экспериментальная Rust-ветка. JavaScript 1.1.1 остаётся в корне как эталон; main не меняется. Публикация релиза только после проверки реального микрофона и игры.
 
-- Rust-каталог извлечён из исходников 1.1.1: 11 способностей, 143 фразы V2, 96 для штатной модели, 6 префиксов, 8 слотов предметов.
-- Перенесены чистые функции парсера, проверки фраз и клавиш, профили задержек, планирование шагов и начальная очередь с подтверждением. Добавлен отдельный автомат split Invoke/GSI с подтверждением, тайм-аутом, отменой при потере готовности микрофона и фиксацией профиля; пока не связан с реальным вводом.
-- Нативный Vosk через локальную DLL и CPAL/WASAPI. CLI для WAV и теста микрофона; никаких нажатий. Встроенный Node/Electron не нужен для CLI.
-- Проверка исходного архива V2 по прежнему манифесту и распаковка в новую папку. Чтение словаря FST; модель не меняется.
-- Перенесён read-only VDF-парсер и валидация импортированных биндов. Добавлены локальный HTTP GSI-приёмник и наблюдающий Win32-хук клавиатуры/мыши с собственным циклом сообщений. Пока отсутствуют связка хука с исполнением, автоматическое определение аккаунта Steam и применение обновлений к рабочему хуку, трей, окно настроек, нативный оверлей, OBS, полноценная миграция и установщик. Нет принудительного программного ресемплинга, шумоподавления и измеренного сравнения с Electron. Выбор 16/48 кГц запрашивает поддерживаемую конфигурацию устройства, иначе явно возвращается к системной частоте.
+## Что перенесено
 
-## Разработка
+- Каталог 11 способностей, 143 фразы V2, 96 для штатной модели, 6 префиксов, 8 слотов предметов; парсер, профили задержек, планирование, очередь и split Invoke/GSI.
+- Нативные Vosk DLL и CPAL/WASAPI, PTT, 250 мс preroll, защита от повторов, распознавание частичных и финальных результатов. Варианты 16/48 кГц или auto, блоки 256/512/1024/2048, эксперимент frames-per-chunk=3 на отдельной копии. Оригинальный архив V2 проверяется по неизменному SHA-256.
+- Win32-хук с подтверждением новых биндов; scan-code исполнение и отпускание клавиш при отмене. Реальный ввод только с явным --live и фокусом Dota. Без --live — проверка распознавания, в том числе вне игры.
+- GSI, обнаружение аккаунта и каталога Steam, мониторинг файла биндов без записи в Steam. Отдельная запись восстановления GSI; изменённые извне файлы не перезаписываются.
+- Настройки и OBS через локальный HTTP/SSE; интерфейс настроек пока в браузере, нативный GDI-оверлей и трей в отдельном Win32-потоке. Браузер не захватывает звук и не выполняет распознавание.
+- Настройки сохраняются в %APPDATA%/VoiceInvokerNative, исходные данные 1.1.1 только читаются. Установщик NSIS включает Rust EXE, DLL Vosk и V2. Нет зависимости от установленного Node, Electron, Python или PowerShell для работы приложения.
+
+## Разработка и проверка
 
 ```powershell
 cd rust-native
-cargo test
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo build --release
+node scripts/parity.cjs
 cargo run -- verify-model ../model/vosk-model-small-ru-invoker.tar.gz
 cargo run -- extract-model ../model/vosk-model-small-ru-invoker.tar.gz model-extracted
 cargo run -- parse "готовь торнадо метеор"
@@ -20,38 +26,16 @@ cargo run --release -- recognize-wav C:/trusted-vosk/libvosk.dll model-extracted
 cargo run --release -- microphone C:/trusted-vosk/libvosk.dll model-extracted/vosk-model-small-ru-0.22 15 512
 ```
 
-WAV: моно PCM16. DLL должна быть из доверенного пакета Vosk вместе с её зависимостями. Команда microphone только Windows. Устройство по умолчанию или имя устройства последним аргументом. Используется фактическая частота устройства. Лог выводит гипотезы и совпадения, но не отправляет их в игру. Пользовательские настройки 1.1.1 читаются только при явном указании файла для WAV, не перезаписываются.
+WAV: моно PCM16. DLL должна быть из доверенного пакета Vosk вместе с зависимостями. Microphone — Windows. Можно добавить --rate=16000, --rate=48000 или --rate=auto; если устройство не поддерживает запрошенную частоту, используется системная. Программный ресемплинг и шумоподавление пока не реализованы.
 
-## Следующие этапы
+`session DLL MODEL_DIR CONFIG 300` — тестовая сессия; добавление --live экспериментально включает ввод (testOnly имеет приоритет). Закройте 1.1.1 перед запуском. Ctrl+Shift+F8 — выход, Ctrl+Shift+F9 — настройки. Установленный EXE: `launch` — тест распознавания, `launch --live --dota` — экспериментальный игровой режим. `check-install` проверяет нативный движок и V2 без микрофона.
 
-1. Проверить Rust CI, настоящую V2 с нативным Vosk и воспроизводимые записи голоса.
-2. Перенести полный автомат GSI, очередь с подтверждением, нативный поток ввода Win32 с безопасным завершением.
-3. Синхронизация биндов, Quickcast предметов, диагностика, сохранение настроек.
-4. Нативный трей и оверлей, отдельное окно настроек, OBS.
-5. Сравнить потребление CPU/RAM и задержки с 1.1.1 на одинаковых записях. Установщик и ручная проверка Windows 10 до выпуска.
+`init-config PATH_TO_1.1.1_CONFIG` — однократное копирование настроек. `inspect-steam STEAM_DIR [ACTIVE_ACCOUNT_ID]` — read-only диагностика. `gsi-install DOTA_DIR CONFIG`, `gsi-remove` — явная установка/восстановление. `watch-binds FILE 15`, `gsi-monitor 3055 15`, `hook-smoke`, `shell-smoke` — изолированные проверки.
 
-CI загружает официальный пакет Vosk 0.3.45 для Windows/Linux x64 (SHA-256 из PyPI), извлекает DLL/SO без установки Python-биндингов, проверяет оригинальную V2 и запускает нативный распознаватель на PCM тишине 16/48 кГц. Это smoke-test движка, не измерение точности речи.
+## CI и ограничения
 
-Дополнительные команды: `cargo run -- gsi-monitor 3055 15` — локальный GSI-монитор (без игровых действий); `cargo run -- hook-smoke` — три цикла установки и удаления нативных Windows-хуков в режиме наблюдения, без блокировки клавиш. CI проверяет HTTP-авторизацию, origin, размер запроса, реальный пакет и жизненный цикл хука.
+2091 дифференциальный сценарий выполняется относительно оригинальных JS-функций. Rust Anything 5.0.2 был запущен в отдельном CI-анализе; последующие запуски определяют последнюю npm-версию один раз и фиксируют её в отчёте. Это вспомогательный анализ, не автоматическая конвертация. Node/Python нужны только разработчику и CI.
 
-`extract-model ARCHIVE NEW_DIR --frames-per-chunk=3` создаёт только экспериментальную распакованную копию. `microphone ... --rate=16000` / `--rate=48000` / `--rate=auto` позволяет сравнивать режимы. `watch-binds FILE 15` использует уведомления ОС о родительской папке и читает бинды без записи в Steam. Ветка пока не посылает игровые нажатия.
+CI проверяет настоящий Vosk 0.3.45 с оригинальной V2 на тишине 16/48 кГц, GSI, жизненный цикл Windows-хуков и окон; предусмотрена реальная установка, восстановление повреждённой модели и удаление с восстановлением GSI. Установщик доступен как артефакт только после успешного Windows CI.
 
-## Проверка миграции по эталонному поведению
-
-`node scripts/parity.cjs` после `cargo build --release` записывает реальные ответы оригинальных функций JavaScript и прогоняет те же входы через Rust JSONL-адаптер. Проверяются точные результаты всех 143 фраз, префиксов, промежуточных гипотез, кодов клавиш, всех комбинаций способностей и профилей скорости, VDF. Это подход record/replay, аналогичный rust-anything, без зависимости от стороннего инструмента. Сам rust-anything пока не установлен и не запускался. Нативный ввод, аудиоустройства, GUI и GSI требуют отдельных интеграционных проверок. Node используется исключительно в CI для эталона, не в Rust-приложении.
-
-[Migration contract and progress](MIGRATION.md). The external rust-anything CLI analysis runs separately in GitHub Actions using a pinned npm version; the existing differential test is the actual mandatory behavior gate. Speech-session state now deduplicates partial/final hypotheses, enforces 2500 ms repeat protection and 1200 ms idle termination, and does not commit tentative preparation commands at release. The microphone CLI is still test-only and does not implement full PTT capture.
-
-`init-config PATH_TO_1.1.1_CONFIG` explicitly copies preferences into `%APPDATA%/VoiceInvokerNative` once. The original remains untouched. `inspect-steam STEAM_DIR [ACTIVE_ACCOUNT_ID]` reports read-only discovery/binding readiness without exposing paths or tokens. These helpers are not yet connected to a full native desktop session.
-
-Unified Windows session: `cargo run --release -- session DLL MODEL_DIR CONFIG 300` (dry run; PTT in Dota or testOnly/always). `--live` explicitly enables experimental input, disabled by testOnly. No key suppression or live binding reload yet; close 1.1.1 before running to avoid port conflicts. Ctrl+Shift+F8 exits. Physical microphone and Dota behavior have not been verified. This is not a replacement release.
-
-The native session now reads Steam registry paths, watches the binding file, and applies validated changes after the current cast/slot wait. The hook acknowledges updates without restart; saved changes are confined to the native settings directory. Configured blocking only occurs in explicitly enabled live mode, with key-up tracking. The session stops recognition and dispatch when Dota loses focus or chat opens. Actual gameplay remains unverified.
-
-`gsi-install DOTA_DIR CONFIG` and `gsi-remove` explicitly manage the native GSI recovery record in VoiceInvokerNative. Existing identical integration is left intact; externally modified integration is not overwritten. Neither command changes Steam launch options. Real input requires the Dota executable in the foreground. Session config writes are only permitted when the supplied file is the native store's config.json.
-
-The Rust session serves the original-style settings at `/settings` and OBS display at `/overlay.html`. Browser audio capture and WASM recognition are removed; the native session supplies device names, meter and recognition events. Configuration edits require the isolated native store, validate the actual model dictionary and apply after restart. Ctrl+Shift+F9 opens settings in the default browser for now. This does not yet implement the always-on-top native game overlay or tray. Direct HTTP voice injection is not exposed.
-
-Native Win32 tray and overlay now have a separate message-loop thread. Tray controls settings, toggle, restart and exit; overlay is click-through, topmost, excluded from the taskbar and displays the native recognition meter and cast notices near the cursor. OBS retains the original HTML. Native visual parity, multi-monitor positioning and actual tray interaction still need manual verification.
-
-Native NSIS installer is built as a branch CI artifact (not a public release). It bundles the compiled Rust binary, native Vosk DLLs and verified V2; no Electron, Node, Python or PowerShell required to run it. Installation checks the actual native engine; menu shortcuts provide explicit live launch and a dry-run test. Migration and uninstallation preserve preferences, original GSI, and 1.1.1. Native settings are stored separately. No public release until the physical microphone and actual Dota casting are tested.
+Осталось подтвердить работу на Windows 10 с физическим микрофоном и Dota, точность фраз и задержки, визуальное соответствие и несколько мониторов, нативное окно настроек, зависимости и сравнительные показатели CPU/RAM. [Контракт миграции](MIGRATION.md).

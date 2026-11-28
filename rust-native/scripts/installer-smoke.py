@@ -19,7 +19,10 @@ with tempfile.TemporaryDirectory(prefix="vi-native-installer-") as tmp:
     env["PATH"]=os.pathsep.join([str(pathlib.Path(os.environ["SystemRoot"])/"System32"),os.environ["SystemRoot"]])
     def run(*args):
         subprocess.run([str(x) for x in args],check=True,env=env,timeout=180)
-    run(installer,"/S",f"/D={dest}")
+    def install():
+        # NSIS requires the final /D argument to be unquoted even with spaces.
+        subprocess.run(f'"{installer}" /S /D={dest}',check=True,env=env,timeout=180)
+    install()
     exe=dest/"voice-invoker-native.exe"
     run(exe,"check-install")
     legacy=base/"legacy.json"
@@ -29,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix="vi-native-installer-") as tmp:
     saved=config.read_bytes()
     model=dest/"model"/manifest["filename"]
     model.write_bytes(b"damaged fixture")
-    run(installer,"/S",f"/D={dest}")
+    install()
     assert config.read_bytes()==saved
     assert hashlib.sha256(model.read_bytes()).hexdigest()==manifest["sha256"]
     dota=base/"Dota"
@@ -42,7 +45,8 @@ with tempfile.TemporaryDirectory(prefix="vi-native-installer-") as tmp:
     run(exe,"gsi-install",dota,config)
     assert cfg.read_bytes()!=b"old integration"
     # NSIS uninstall runs from a temporary copy; _?= keeps it synchronous.
-    run(dest/"Uninstall.exe","/S",f"_?={dest}")
+    uninstaller=dest/"Uninstall.exe"
+    subprocess.run(f'"{uninstaller}" /S _?={dest}',check=True,env=env,timeout=180)
     assert cfg.read_bytes()==b"old integration"
     assert config.read_bytes()==saved
     assert not exe.exists()

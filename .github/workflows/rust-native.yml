@@ -40,7 +40,7 @@ jobs:
         run: .\target\release\voice-invoker-native.exe hook-smoke
       - name: Native Win32 overlay and tray host lifecycle
         if: runner.os == 'Windows'
-        run: .\\target\\release\\voice-invoker-native.exe shell-smoke
+        run: .\target\release\voice-invoker-native.exe shell-smoke
       - name: GSI loopback integration
         run: python scripts/gsi-smoke.py
       - name: Native Vosk with verified V2 (16/48 kHz)

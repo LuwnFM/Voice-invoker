@@ -44,6 +44,7 @@ FunctionEnd
     SetErrorLevel 1
     Abort
   ${EndIf}
+!macroend
 Section "Install"
   !insertmacro RequireClosed
   SetOutPath "$INSTDIR"
