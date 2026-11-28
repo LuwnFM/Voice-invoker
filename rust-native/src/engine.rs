@@ -77,8 +77,7 @@ impl Engine {
         self.next_id=self.next_id.wrapping_add(1).max(1);
         let duration=steps.iter().map(|s|match *s{Step::Key(_,d)|Step::Down(_,d)|Step::Up(_,d)|Step::Click(d)=>d}).sum::<u64>();
         if let Some(action)=action.filter(|a|*a!=Action::Prepare){
-            if let (Some((_,packet)),Some(spell))=(&self.gsi,self.find(&command.target)){
-                let id=spell.base.as_deref().unwrap_or(&spell.id).to_owned();
+            if let (Some((_,packet)),Some(id))=(&self.gsi,self.find(&command.target).map(|spell|spell.base.as_deref().unwrap_or(&spell.id).to_owned())){
                 let pr=self.predicted.get_or_insert_with(||Prediction{slots:packet.slots().into_iter().map(str::to_owned).collect(),..Prediction::default()});
                 if action==Action::Invoke{pr.slots.retain(|v|v!=&id);pr.slots.insert(0,id.clone());pr.slots.truncate(2);pr.invoked=true;}
                 pr.used.insert(id);pr.after=None;
@@ -130,6 +129,7 @@ impl Engine {
                     let Some(spell)=self.find(&command.target).cloned()else{self.refuse("Unknown spell");continue;};
                     let fresh=self.fresh_gsi(now);
                     let plan=if let Some((_,packet))=fresh{self.plan(packet,&spell,command.prepare_only)}else{Plan::Cast(if command.prepare_only{Action::Prepare}else{Action::Invoke})};
+                    let unconfirmed=fresh.is_none();
                     if plan!=Plan::Wait{self.gsi_wait_until=None;}
                     match plan {
                         Plan::Refuse(e)=>self.refuse(e),
@@ -141,7 +141,7 @@ impl Engine {
                         },
                         Plan::Cast(action)=>{
                             if action==Action::Prepare{
-                                self.awaiting=Some(WaitingSlot{command:command.clone(),profile,from:now,deadline:None,unconfirmed:fresh.is_none()});
+                                self.awaiting=Some(WaitingSlot{command:command.clone(),profile,from:now,deadline:None,unconfirmed});
                             }
                             let steps=sequence(&self.config,&spell,action,profile);
                             return self.dispatch(now,command,profile,Some(action),steps);

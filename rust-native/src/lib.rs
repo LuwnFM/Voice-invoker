@@ -18,6 +18,7 @@ pub mod binding_watch;
 pub mod catalog;
 pub mod config;
 pub mod storage;
+pub mod log;
 pub mod steam;
 pub mod integration;
 pub mod input;

@@ -13,12 +13,14 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     let noise=config.other.get("noiseSuppression").and_then(|v|v.as_bool()).unwrap_or(false);
     let mut ui_state=None;
     let native_store=crate::storage::native_directory().ok().and_then(|dir|crate::storage::Store::open(&dir).ok()).filter(|store|store.path().canonicalize().ok().zip(config_path.canonicalize().ok()).is_some_and(|(a,b)|a==b));
+    let log=crate::log::SessionLog::new(native_store.as_ref().map(|s|s.directory()));
+    log.write("Starting native session");
     let server=Server::start_with_ui(&config,|gsi|{let ui=crate::ui::Ui::new(&config,native_store.clone(),words,crate::capture::devices(),verified,gsi);ui_state=Some(ui.clone());crate::ui::router(ui)})?;
     let ui=ui_state.ok_or("UI startup failed")?;ui.set_dry_run(!live);
     let shell=crate::shell::Shell::start(ui.clone(),config.window_title.clone(),true,true)?;
     let mut settings_child=crate::settings_window::SettingsChild::default();
-    let capture=match Capture::open(Some(&config.microphone),requested,block,noise){Ok(c)=>c,Err(e)=>return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string())};
-    let mut vosk=match Vosk::new(dll,model_path,capture.rate,&parser.grammar()){Ok(v)=>v,Err(e)=>return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string())};
+    let capture=match Capture::open(Some(&config.microphone),requested,block,noise){Ok(c)=>c,Err(e)=>{log.write(&format!("Audio startup: {e}"));return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string());}};
+    let mut vosk=match Vosk::new(dll,model_path,capture.rate,&parser.grammar()){Ok(v)=>v,Err(e)=>{log.write(&format!("Vosk startup: {e}"));return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string());}};
     let arm=Arc::new(AtomicBool::new(false));
     let hook=Hook::start_session(config.clone(),live,arm.clone())?;
     let mut always=!live||config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
@@ -26,18 +28,22 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     let mut runtime=Runtime::new(config.clone(),parser,capture.rate);
     let mut active:Option<Execution>=None;let mut last_packet=None;
     let watcher=crate::steam::automatic_steam().and_then(|(path,id)|crate::steam::inspect(&path,id).binding_file).and_then(|path|crate::binding_watch::BindingWatch::new(&path).ok());
-    ui.set_discovery(crate::steam::diagnostic(&config));ui.set_audio(capture.device_rate,capture.rate);
+    let discovery=crate::steam::diagnostic(&config);
+    let startup_issue=live&&verified&&["dotaFound","gsiInstalled","gsiConfigMatches"].iter().any(|key|discovery.get(*key).and_then(|v|v.as_bool())!=Some(true));
+    ui.set_discovery(discovery);ui.set_audio(capture.device_rate,capture.rate);
+    if startup_issue{log.write("Startup: Dota or GSI setup needs attention");let _=settings_child.open(server.address.port());}
     let mut refresh_at=watcher.as_ref().map(|_|0u64);let mut pending=None;
     let mut require_release=false;
     let mut allowed_before=false;let start=Instant::now();let mut last_meter=0u64;let mut profile=config.timing_profile;let mut restart=false;
     println!("Native session: device {} Hz, recognizer {} Hz; GSI {}; input {}",capture.device_rate,capture.rate,server.address,if live{"LIVE"}else{"DRY RUN"});
-    if let Err(e)=capture.start(){arm.store(false,Ordering::Release);hook.stop()?;drop(capture);return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string());}
+    if let Err(e)=capture.start(){log.write(&format!("Capture start: {e}"));arm.store(false,Ordering::Release);hook.stop()?;drop(capture);return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,&e.to_string());}
     ui.set_hook_ready(true);
+    log.write(&format!("Ready: device {} Hz, Vosk {} Hz, RNNoise {}, live {}",capture.device_rate,capture.rate,noise,live));
     while start.elapsed()<Duration::from_secs(seconds){
         let now=start.elapsed().as_millis() as u64;
-        if !server.running(){arm.store(false,Ordering::Release);runtime.ready(false,now);return Err("GSI worker failed".into());}
+        if !server.running(){log.write("GSI server failed");arm.store(false,Ordering::Release);runtime.ready(false,now);return Err("GSI worker failed".into());}
         if capture.failure.load(Ordering::Acquire)||hook.overflow.load(Ordering::Acquire)||!hook.running(){
-            arm.store(false,Ordering::Release);drop(active.take());runtime.ready(false,now);let _=hook.stop();drop(capture);return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,"Микрофон или хук отключён. Проверь устройство и перезапусти приложение.");
+            log.write("Audio/hook worker disconnected; input stopped");arm.store(false,Ordering::Release);drop(active.take());runtime.ready(false,now);let _=hook.stop();drop(capture);return recovery(&config,&ui,&shell,&mut settings_child,server.address.port(),seconds,"Микрофон или хук отключён. Проверь устройство и перезапусти приложение.");
         }
         let mut quit=false;let mut shell_restart=false;
         while let Ok(event)=shell.events.try_recv(){match event{
@@ -62,7 +68,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
                 refresh_at=None;
                 match w.read(&config){
                     Ok(next) if config.auto_sync_bindings&&ui.can_sync()&&(next.keys!=config.keys||next.voice_chat_key!=config.voice_chat_key||next.slot_cast_modes!=config.slot_cast_modes)=>{pending=Some(next);runtime.discard_waiting();},
-                    Ok(_)=>{},Err(e)=>eprintln!("Bindings unchanged: {e}"),
+                    Ok(_)=>{},Err(e)=>{log.write(&format!("Bindings unchanged: {e}"));eprintln!("Bindings unchanged: {e}");},
                 }
             }
         }
@@ -72,7 +78,7 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
             // During migration only the isolated native store is eligible for automatic writes.
             always=!live||config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
             if let Err(e)=ui.bindings(&config){eprintln!("Bindings active but not saved: {e}");}
-            println!("Bindings updated without restart");
+            log.write("Bindings updated without restart");println!("Bindings updated without restart");
         }}
         let (enabled,ptt,chat)=hook.snapshot();runtime.enabled(enabled,now);
         let game=focused(&config.window_title);
@@ -111,10 +117,11 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
             }
         }
         ui.update(true,enabled,runtime.listening(),profile);
-        for notice in runtime.notices(){if let crate::engine::Notice::Refused(reason)=&notice{ui.notice("refuse",None,Some(reason));}println!("{notice:?}");}
+        for notice in runtime.notices(){if let crate::engine::Notice::Refused(reason)=&notice{ui.notice("refuse",None,Some(reason));}log.write(&format!("{notice:?}"));println!("{notice:?}");}
         std::thread::sleep(Duration::from_millis(if active.is_some(){2}else if runtime.listening(){4}else{10}));
     }
     arm.store(false,Ordering::Release);drop(active);runtime.ready(false,start.elapsed().as_millis() as u64);hook.stop()?;shell.stop()?;drop(settings_child);drop(server);drop(capture);
+    log.write(if restart{"Restart requested"}else{"Session stopped"});
     Ok(restart)
 }
 
