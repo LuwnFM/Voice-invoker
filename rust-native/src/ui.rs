@@ -64,7 +64,8 @@ impl Ui{
         if let (Some(a),Some(b))=(out.as_object_mut(),d.diagnostic.as_object()){for (k,v) in b{if k=="local"{if let (Some(local),Some(extra))=(a.get_mut("local").and_then(Value::as_object_mut),v.as_object()){local.extend(extra.clone());}}else{a.insert(k.clone(),v.clone());}}}
         out
     }
-    pub fn set_discovery(&self,value:Value){self.data.lock().unwrap_or_else(|e|e.into_inner()).diagnostic=value;}
+    pub fn set_audio(&self,device_rate:u32,rate:u32){let mut d=self.data.lock().unwrap_or_else(|e|e.into_inner());d.diagnostic["audioDeviceRate"]=json!(device_rate);d.diagnostic["audioRecognizerRate"]=json!(rate);}
+    pub fn set_discovery(&self,value:Value){let mut d=self.data.lock().unwrap_or_else(|e|e.into_inner());if let (Some(a),Some(b))=(d.diagnostic.as_object_mut(),value.as_object()){a.extend(b.clone());}else{d.diagnostic=value;}}
 }
 async fn config(State(ui):State<Ui>)->Json<Value>{
     let d=ui.data.lock().unwrap_or_else(|e|e.into_inner());let c=&d.saved;

@@ -24,11 +24,12 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
     let mut runtime=Runtime::new(config.clone(),parser,capture.rate);
     let mut active:Option<Execution>=None;let mut last_packet=None;
     let watcher=crate::steam::automatic_steam().and_then(|(path,id)|crate::steam::inspect(&path,id).binding_file).and_then(|path|crate::binding_watch::BindingWatch::new(&path).ok());
-    ui.set_discovery(crate::steam::diagnostic(&config));
+    ui.set_discovery(crate::steam::diagnostic(&config));ui.set_audio(capture.device_rate,capture.rate);
     let mut refresh_at=watcher.as_ref().map(|_|0u64);let mut pending=None;
     let mut require_release=false;
+    let mut settings_child=crate::settings_window::SettingsChild::default();
     let mut allowed_before=false;let start=Instant::now();let mut last_meter=0u64;let mut profile=config.timing_profile;let mut restart=false;
-    println!("Native session: {} Hz; GSI {}; input {}",capture.rate,server.address,if live{"LIVE"}else{"DRY RUN"});
+    println!("Native session: device {} Hz, recognizer {} Hz; GSI {}; input {}",capture.device_rate,capture.rate,server.address,if live{"LIVE"}else{"DRY RUN"});
     capture.start()?;
     while start.elapsed()<Duration::from_secs(seconds){
         let now=start.elapsed().as_millis() as u64;
@@ -40,14 +41,14 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
             crate::shell::ShellEvent::Quit=>quit=true,
             crate::shell::ShellEvent::Restart=>shell_restart=true,
             crate::shell::ShellEvent::Toggle=>hook.toggle()?,
-            crate::shell::ShellEvent::Settings=>{ui.set_discovery(crate::steam::diagnostic(&config));let _=std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{}/settings",server.address.port())).spawn();},
+            crate::shell::ShellEvent::Settings=>{ui.set_discovery(crate::steam::diagnostic(&config));if let Err(e)=settings_child.open(server.address.port()){eprintln!("Settings: {e}");}},
         }}
         while let Ok(event)=hook.events.try_recv(){match event{
             Event::Quit=>quit=true,
             Event::Toggle=>{require_release=true;},
             Event::Profile(next)=>{profile=next;runtime.profile(next);},
             Event::Listen(_)=>{},
-            Event::Settings=>{ui.set_discovery(crate::steam::diagnostic(&config));let _=std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{}/settings",server.address.port())).spawn();},
+            Event::Settings=>{ui.set_discovery(crate::steam::diagnostic(&config));if let Err(e)=settings_child.open(server.address.port()){eprintln!("Settings: {e}");}},
             Event::Blocked=>{ui.notice("blocked",None,None);},
         }}
         if quit||shell_restart||ui.restart_requested(){restart=!quit;break;}
@@ -112,6 +113,6 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:b
         for notice in runtime.notices(){if let crate::engine::Notice::Refused(reason)=&notice{ui.notice("refuse",None,Some(reason));}println!("{notice:?}");}
         std::thread::sleep(Duration::from_millis(2));
     }
-    arm.store(false,Ordering::Release);drop(active);runtime.ready(false,start.elapsed().as_millis() as u64);hook.stop()?;shell.stop()?;drop(server);drop(capture);
+    arm.store(false,Ordering::Release);drop(active);runtime.ready(false,start.elapsed().as_millis() as u64);hook.stop()?;shell.stop()?;drop(settings_child);drop(server);drop(capture);
     Ok(restart)
 }

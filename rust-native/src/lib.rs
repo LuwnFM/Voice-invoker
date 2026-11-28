@@ -10,6 +10,8 @@ pub mod desktop;
 pub mod launcher;
 #[cfg(windows)]
 pub mod shell;
+#[cfg(windows)]
+pub mod settings_window;
 pub mod parity;
 pub mod bindings;
 pub mod binding_watch;

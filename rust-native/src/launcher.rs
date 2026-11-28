@@ -14,7 +14,7 @@ pub fn launch(live:bool,launch_dota:bool)->Result<(),Box<dyn std::error::Error>>
         store.migrate(&PathBuf::from(appdata).join("VoiceInvoker/config.json"))?;
     }
     let config=match store.load()?{Some(c)=>c,None=>{let c=Config::default();store.save(&c)?;c}};
-    let Some(instance)=Instance::acquire()?else{let _=std::process::Command::new("explorer.exe").arg(format!("http://127.0.0.1:{}/settings",config.port)).spawn();return Ok(());};
+    let Some(instance)=Instance::acquire()?else{let _=std::process::Command::new(&exe).args(["settings-window",&config.port.to_string()]).spawn();return Ok(());};
     let dll=root.join("runtime/libvosk.dll");
     let archive=root.join("model").join(model::manifest().filename);
     if !dll.is_file(){return Err("Bundled Vosk runtime missing; reinstall the application".into());}

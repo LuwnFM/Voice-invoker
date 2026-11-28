@@ -69,6 +69,8 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             voice_invoker_native::gsi_server::monitor(&cfg,seconds)?;
         },
         #[cfg(windows)]
+        Some("settings-window") if args.len()==2=>voice_invoker_native::settings_window::run(args[1].parse()?)?,
+        #[cfg(windows)]
         Some("check-install") if args.len()==1=>{let exe=std::env::current_exe()?;voice_invoker_native::launcher::verify_install(exe.parent().ok_or("Missing application directory")?)?;},
         #[cfg(windows)]
         Some("launch") if args.iter().skip(1).all(|s|s=="--live"||s=="--dota")=>voice_invoker_native::launcher::launch(args.iter().any(|s|s=="--live"),args.iter().any(|s|s=="--dota"))?,

@@ -41,6 +41,9 @@ remove.write_text("\n".join(lines)+"\n", encoding="utf-8")
 version = "2.0.0-alpha.1"
 exe = out / f"VoiceInvoker-Native-Setup-{version}.exe"
 nsis = pathlib.Path(os.environ["ProgramFiles(x86)"]) / "NSIS/makensis.exe"
+if not nsis.is_file():
+    nsis = pathlib.Path(shutil.which("makensis") or shutil.which("makensis.exe") or str(nsis))
+assert nsis.is_file(), "NSIS 3.11 is required for packaging"
 subprocess.run([str(nsis), f"/DVERSION={version}", f"/DSTAGE={stage}", f"/DOUTFILE={exe}", f"/DREMOVEFILES={remove}", f"/DICONFILE={ico}", str(root/"installer.nsi")], check=True, timeout=300)
 digest = hashlib.sha256(exe.read_bytes()).hexdigest()
 (out/"SHA256SUMS.txt").write_text(f"{digest}  {exe.name}\n",encoding="ascii")

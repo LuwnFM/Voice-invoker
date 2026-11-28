@@ -3,7 +3,7 @@ use crate::ui::Ui;
 use std::{cell::RefCell,io,mem::size_of,ptr::{null,null_mut},sync::mpsc::{sync_channel,Receiver,SyncSender},thread::{self,JoinHandle},time::Duration};
 use windows_sys::Win32::{
     Foundation::{HWND,LPARAM,LRESULT,WPARAM,POINT,RECT},
-    Graphics::Gdi::{BeginPaint,EndPaint,PAINTSTRUCT,CreateSolidBrush,DeleteObject,FillRect,SetBkMode,SetTextColor,DrawTextW,SelectObject,GetStockObject,DEFAULT_GUI_FONT,TRANSPARENT,DT_SINGLELINE,DT_END_ELLIPSIS,DT_VCENTER,DT_LEFT,InvalidateRect},
+    Graphics::Gdi::{BeginPaint,EndPaint,PAINTSTRUCT,CreateSolidBrush,DeleteObject,FillRect,SetBkMode,SetTextColor,DrawTextW,SelectObject,GetStockObject,DEFAULT_GUI_FONT,TRANSPARENT,DT_SINGLELINE,DT_END_ELLIPSIS,DT_VCENTER,DT_LEFT,InvalidateRect,MonitorFromPoint,MonitorFromWindow,GetMonitorInfoW,MONITORINFO,MONITOR_DEFAULTTONEAREST},
     System::{LibraryLoader::GetModuleHandleW,Threading::GetCurrentThreadId},
     UI::{Shell::{Shell_NotifyIconW,NOTIFYICONDATAW,NIF_MESSAGE,NIF_ICON,NIF_TIP,NIM_ADD,NIM_DELETE},
         WindowsAndMessaging::*},
@@ -54,9 +54,12 @@ fn refresh(){
         unsafe{
             if show{
                 let mut pt=POINT{x:0,y:0};GetCursorPos(&mut pt);
-                let sw=GetSystemMetrics(SM_CXSCREEN).max(WIDTH);let sh=GetSystemMetrics(SM_CYSCREEN).max(HEIGHT);
-                let x=if notice.is_some(){(pt.x-WIDTH/2).clamp(0,sw-WIDTH)}else{(sw-WIDTH)/2};
-                let y=if notice.is_some(){(pt.y-HEIGHT-24).clamp(0,sh-HEIGHT)}else{32};
+                let monitor=if notice.is_some(){MonitorFromPoint(pt,MONITOR_DEFAULTTONEAREST)}else{MonitorFromWindow(GetForegroundWindow(),MONITOR_DEFAULTTONEAREST)};
+                let mut info:MONITORINFO=std::mem::zeroed();info.cbSize=size_of::<MONITORINFO>() as u32;
+                let area=if !monitor.is_null()&&GetMonitorInfoW(monitor,&mut info)!=0{info.rcMonitor}else{RECT{left:0,top:0,right:GetSystemMetrics(SM_CXSCREEN),bottom:GetSystemMetrics(SM_CYSCREEN)}};
+                let right=(area.right-WIDTH).max(area.left);let bottom=(area.bottom-HEIGHT).max(area.top);
+                let x=if notice.is_some(){(pt.x-WIDTH/2).clamp(area.left,right)}else{area.left+(right-area.left)/2};
+                let y=if notice.is_some(){(pt.y-HEIGHT-24).clamp(area.top,bottom)}else{(area.top+32).min(bottom)};
                 SetWindowPos(ctx.overlay,HWND_TOPMOST,x,y,WIDTH,HEIGHT,SWP_NOACTIVATE|SWP_SHOWWINDOW);
                 InvalidateRect(ctx.overlay,null(),0);
             }else{ShowWindow(ctx.overlay,SW_HIDE);}

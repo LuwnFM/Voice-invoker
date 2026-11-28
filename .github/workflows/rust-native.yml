@@ -15,7 +15,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: rust-native
@@ -25,9 +25,17 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all
-      - run: cargo test --all-targets
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo build --release
+      - name: Resolve lockfile for reproducible checks
+        run: cargo generate-lockfile
+      - name: Record resolved lockfile
+        shell: bash
+        run: |
+          echo 'LOCKFILE_BEGIN'
+          cat Cargo.lock
+          echo 'LOCKFILE_END'
+      - run: cargo test --locked --all-targets
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo build --locked --release
         env:
           RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
       - uses: actions/setup-node@v4
@@ -45,6 +53,15 @@ jobs:
         run: python scripts/gsi-smoke.py
       - name: Native Vosk with verified V2 (16/48 kHz)
         run: python scripts/native-smoke.py
+      - name: Install NSIS 3.11 if absent
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'NSIS\makensis.exe'
+          if (-not (Test-Path $nsis)) {
+            choco install nsis --version=3.11 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          }
       - name: Build native standalone installer
         if: runner.os == 'Windows'
         run: python scripts/package-windows.py
