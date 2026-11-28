@@ -4,6 +4,8 @@ pub mod bindings;
 pub mod binding_watch;
 pub mod catalog;
 pub mod config;
+pub mod storage;
+pub mod steam;
 pub mod input;
 pub mod model;
 pub mod recognition;

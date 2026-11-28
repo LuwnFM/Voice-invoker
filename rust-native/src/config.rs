@@ -95,6 +95,9 @@ impl Config {
     // Read only: the native prototype must never change existing 1.1.1 preferences.
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let text=std::fs::read_to_string(path)?;
+        Self::from_json(&text)
+    }
+    pub fn from_json(text:&str)->Result<Self,Box<dyn std::error::Error>>{
         let mut cfg:Self=serde_json::from_str(text.trim_start_matches('\u{feff}'))?;
         let mut keys=Self::default().keys;
         keys.append(&mut cfg.keys);

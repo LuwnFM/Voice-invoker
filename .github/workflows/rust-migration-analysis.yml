@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ff689524fa1d9a7ef3aa041fd408f38dc7c1e2c1
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

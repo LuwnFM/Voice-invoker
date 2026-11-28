@@ -31,7 +31,21 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
                 if let Some(pcm)=blocks.push(sample){tail.clear();let (finalized,text)=engine.feed(&pcm)?;print_result(&parser,&mut session,&mut previous,samples.saturating_mul(1000)/u64::from(spec.sample_rate),finalized,&text);}
             }
             if !tail.is_empty(){let (finalized,text)=engine.feed(&tail)?;print_result(&parser,&mut session,&mut previous,samples.saturating_mul(1000)/u64::from(spec.sample_rate),finalized,&text);}
-            let text=engine.finish()?;let now=samples.saturating_mul(1000)/u64::from(spec.sample_rate);print_result(&parser,&mut session,&mut previous,now,true,&text);let _=session.end(&parser,now);
+            let text=engine.finish()?;let now=samples.saturating_mul(1000)/u64::from(spec.sample_rate);print_result(&parser,&mut session,&mut previous,now,true,&text);let tail=session.end(&parser,now);if !tail.is_empty(){println!("end: => {tail:?}");}
+        },
+        Some("init-config") if args.len()==2=>{
+            let dir=voice_invoker_native::storage::native_directory()?;
+            let store=voice_invoker_native::storage::Store::open(&dir)?;
+            // Explicit migration only; never edit the original config.
+            let copied=store.migrate(Path::new(&args[1]))?;
+            let config=store.load()?;
+            println!("{}",serde_json::json!({"copied":copied,"ready":config.is_some()}));
+        },
+        Some("inspect-steam") if (2..=3).contains(&args.len())=>{
+            let steam=Path::new(&args[1]);
+            let active=args.get(2).map(|s|s.parse()).transpose()?;
+            let status=voice_invoker_native::steam::inspect(steam,active);
+            println!("{}",serde_json::json!({"dotaFound":voice_invoker_native::steam::discover_dota(steam,None).is_some(),"savedLaunchFlag":status.launch_flag,"bindingFileFound":status.binding_file.as_ref().is_some_and(|p|p.is_file()),"bindingsAvailable":status.bindings.is_some(),"bindingsIssue":status.issue}));
         },
         Some("watch-binds") if (2..=3).contains(&args.len())=>{
             let seconds=args.get(2).map(|s|s.parse()).transpose()?.unwrap_or(15);
