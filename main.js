@@ -260,7 +260,7 @@ function prediction() {
 
 // Решаем, что нажимать для способности: { action }, { refuse: причина } или { wait: true }
 function plan(spell, prepareOnly = false) {
-  if (spell.itemSlot) return planItem(spell,gsi,config,prepareOnly);
+  if (spell.itemSlot) return planItem(spell,gsi,config,prepareOnly,Date.now());
   const fresh = gsi && Date.now() - gsi.at < 5000 && gsi.hero;
   if (!fresh) {
     if (!gsiWarned) log('Нет данных от Dota (GSI) — кастую вслепую: сферы + Invoke + слот 1');
@@ -306,7 +306,7 @@ function selectionStatus(now){
 function ensureSelection(entry,profile,resume){
   const now=Date.now(),selected=selectionStatus(now);
   const freshHero=gsi&&now-gsi.at<5000&&gsi.hero;
-  const wrongHero=freshHero&&freshHero!=='npc_dota_hero_invoker';
+  const wrongHero=!!freshHero&&freshHero!=='npc_dota_hero_invoker';
   clearTimeout(selectionTimer);selectionTimer=null;
   const delay=ms=>{selectionTimer=setTimeout(resume,ms);return {wait:true};};
   if(selected===true&&(lastClickAt===null||gsi.at>lastClickAt)){lastClickAt=null;}
@@ -508,6 +508,13 @@ function checkSlot() {
   if (!awaitingSlot || activeCast || !gsi || !last?.state.enabled || !last.state.voiceReady) return;
   const { spell, phrase, from, timer, profile, prepareOnly } = awaitingSlot;
   if (gsi.at < from) return;
+  // When the unit was deselected during Invoke, restore selection before
+  // interpreting the slot list; an enemy packet may have no Invoker slots.
+  if(!prepareOnly&&(gsi.selected===false||awaitingSlot.selectionAt!==undefined||(lastClickAt!==null&&gsi.hero!=='npc_dota_hero_invoker'))){
+    const selection=ensureSelection(awaitingSlot,profile,checkSlot);
+    if(selection.wait)return;
+    if(selection.refuse){clearTimeout(timer);awaitingSlot=null;cast(spell,phrase,selection,profile);return pump();}
+  }
   if(gsi.hero!=='npc_dota_hero_invoker'||gsi.alive!==true||(!prepareOnly&&spell.needsScepter&&gsi.scepter===false)){
     clearTimeout(timer);awaitingSlot=null;
     cast(spell,phrase,{refuse:'Состояние героя изменилось после Invoke'});return pump();
@@ -515,7 +522,7 @@ function checkSlot() {
   const id = spell.base || spell.id;
   const slot = gsi.slots.indexOf(id);
   if (slot < 0) return;
-  if(!prepareOnly){
+  if(!prepareOnly&&awaitingSlot.selectionAt===undefined){
     const selection=ensureSelection(awaitingSlot,profile,checkSlot);
     if(selection.wait)return;
     if(selection.refuse){clearTimeout(timer);awaitingSlot=null;cast(spell,phrase,selection,profile);return pump();}

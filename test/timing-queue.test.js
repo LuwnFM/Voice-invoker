@@ -193,3 +193,12 @@ test('after a click, a different GSI hero waits for the original Invoker packet'
  assert.equal(h.requests[1].action,SELECT_HERO_ACTION);h.ack(h.requests[1]);h.advance(100);h.api.pump();assert.equal(h.requests.length,2);
  h.ctx.gsi={...h.ctx.gsi,at:1140,hero:'npc_dota_hero_invoker'};h.api.pump();assert.equal(h.requests[2].action,ACTION.SLOT2);
 });
+
+test('deselection during Invoke with empty slot data recovers before reading slots',()=>{
+ const h=harness(true,true);h.ctx.config.keys={selectHero:'F1'};
+ h.api.castByPhrase('a');h.ack(h.requests[0]);h.advance(50);
+ h.ctx.gsi={...h.ctx.gsi,at:1050,selected:false,slots:[]};h.api.checkSlot();
+ assert.equal(h.requests[1].action,SELECT_HERO_ACTION);h.ack(h.requests[1]);
+ h.advance(100);h.ctx.gsi={...h.ctx.gsi,at:1150,selected:true,slots:[SPELLS[0].id]};
+ h.api.checkSlot();assert.equal(h.requests[2].action,ACTION.SLOT1);
+});
