@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Voice Invoke</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@500&display=swap" rel="stylesheet">
+<style>
+  /* Палитра интерфейса Dota 2: тёмный сланец, стальные грани, голубой акцент */
+  :root {
+    --bg-hi: #1b2126; --bg-lo: #0b0e11;
+    --head-hi: #232a31; --head-lo: #171c21;
+    --edge: #3a444d; --edge-lo: #000;
+    --text: #e6ecef; --muted: #7d8a94; --dim: #39424a;
+    --accent: #5fb4ea; --ready: #6fbf45; --bad: #e0463a; --gold: #e9bf62;
+    --q: #3fa9f5; --w: #d25cf0; --e: #ff9a2e;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --scale: 1;
+  }
+  html, body {
+    margin: 0; width: 100%; height: 100%; overflow: hidden;
+    background: transparent; color: var(--text); user-select: none;
+    font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  }
+  .panel {
+    background: linear-gradient(180deg, var(--bg-hi), var(--bg-lo));
+    border: 1px solid var(--edge-lo);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .05), 0 0 0 1px var(--edge),
+                0 14px 36px rgba(0, 0, 0, .75);
+  }
+  .title {
+    font-size: 22px; font-weight: 700; line-height: 1; letter-spacing: .16em; text-transform: uppercase;
+    color: transparent; background: linear-gradient(180deg, #fff3cf 0%, #f2cf7d 45%, #c7912f 60%, #e9bf62 100%);
+    -webkit-background-clip: text; background-clip: text;
+    filter: drop-shadow(0 0 6px rgba(240, 190, 90, .45)) drop-shadow(0 1px 1px #000);
+  }
+
+  /* ---------- Индикатор «слушаю» ---------- */
+  #mic {
+    position: absolute; left: 50%; top: 14%;
+    transform: translateX(-50%) scale(var(--scale)); transform-origin: top center;
+    display: none; align-items: center; gap: 12px; min-width: 300px;
+    padding: 6px 16px 6px 10px;
+    border-left: 3px solid var(--accent);
+  }
+  #mic.on { display: flex; }
+  #mic svg { width: 20px; height: 20px; fill: var(--accent); flex: none; filter: drop-shadow(0 0 4px rgba(95, 180, 234, .6)); }
+  .meter {
+    width: 64px; height: 6px; flex: none; overflow: hidden;
+    background: #05070a; border: 1px solid #000; box-shadow: 0 0 0 1px var(--edge);
+  }
+  #level { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), #bfe3fa); transition: width 60ms linear; }
+  #partial {
+    font-size: 20px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); white-space: nowrap; text-shadow: 0 2px 2px #000;
+  }
+  #partial.heard { color: var(--text); }
+
+  /* ---------- Применённая способность: компактная плашка над прицелом ---------- */
+  /* left/top задаются в render — точка над курсором в момент каста */
+  #cast {
+    position: absolute; left: 50%; top: 22%;
+    transform: translate(-50%, -100%) scale(var(--scale)); transform-origin: bottom center;
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 14px 6px 6px;
+    opacity: 0; pointer-events: none;
+  }
+  #cast.show { animation: castfloat 900ms ease-out; }
+  #castIcon {
+    display: block; width: 50px; height: 50px; flex: none;
+    border: 1px solid #000; box-shadow: 0 0 0 1px var(--edge);
+  }
+  .castText { display: flex; flex-direction: column; gap: 4px; }
+  #castName {
+    font-size: 24px; font-weight: 600; line-height: 1; letter-spacing: .04em;
+    text-transform: uppercase; white-space: nowrap; text-shadow: 0 2px 2px #000;
+  }
+  @keyframes castfloat {
+    0% { opacity: 0; transform: translate(-50%, -100%) translateY(6px) scale(var(--scale)); }
+    12% { opacity: 1; transform: translate(-50%, -100%) scale(var(--scale)); }
+    50% { opacity: 1; transform: translate(-50%, -100%) scale(var(--scale)); }
+    100% { opacity: 0; transform: translate(-50%, -100%) translateY(-24px) scale(var(--scale)); }
+  }
+
+  /* ---------- Статус загрузки ---------- */
+  #status {
+    position: absolute; top: 12px; left: 12px; display: none;
+    padding: 6px 14px; font-size: 16px; font-weight: 600; letter-spacing: .05em;
+    border-left: 3px solid var(--accent);
+  }
+  #status.on { display: block; }
+  #status.bad { color: var(--bad); border-left-color: var(--bad); }
+
+  #toast {
+    position: absolute; left: 50%; top: 18%;
+    transform: translateX(-50%) translateY(-4px);
+    font-size: 26px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    text-shadow: 0 2px 6px #000, 0 0 2px #000;
+    opacity: 0; white-space: nowrap;
+    transition: opacity 150ms ease, transform 150ms var(--ease-out);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%); transition-duration: 200ms; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #cast.show { animation-name: fadeonly; }
+    #toast { transform: translateX(-50%); }
+  }
+  @keyframes fadeonly {
+    0% { opacity: 0; transform: translate(-50%, -100%) scale(var(--scale)); }
+    12%, 50% { opacity: 1; transform: translate(-50%, -100%) scale(var(--scale)); }
+    100% { opacity: 0; transform: translate(-50%, -100%) scale(var(--scale)); }
+  }
+</style>
+</head>
+<body>
+<div id="mic" class="panel">
+  <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+  <div class="meter"><div id="level"></div></div>
+  <div id="partial">назови способность…</div>
+</div>
+<div id="cast" class="panel">
+  <img id="castIcon" alt="">
+  <div class="castText">
+    <span class="title">Sharlottka</span>
+    <div id="castName"></div>
+  </div>
+</div>
+<div id="status" class="panel"></div>
+<div id="toast"></div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  document.documentElement.style.setProperty('--scale', params.get('scale') || '1');
+  const soundOn = params.get('sound') === '1';
+  // Распознавание работает только в окне поверх игры (?voice=1), не в OBS
+  const ICON = (id) => `https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/abilities/${id}.png`;
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- Звук ----------
+  // sounds/keys.wav — 12 щелчков клавиш подряд по 80 мс, играет случайный щелчок
+  const SLOT = 0.08, CLIPS = 12;
+  let sfxCtx, keysBuf, lastClip = -1;
+  if (soundOn) {
+    sfxCtx = new AudioContext();
+    fetch('/sounds/keys.wav').then((r) => r.arrayBuffer()).then((b) => sfxCtx.decodeAudioData(b))
+      .then((buf) => { keysBuf = buf; }).catch(() => {});
+  }
+  function keyClick({ vol = 0.22, tone = 1, delay = 0 } = {}) {
+    if (!soundOn || !keysBuf) return;
+    try {
+      let i;
+      do i = Math.floor(Math.random() * CLIPS); while (i === lastClip); // без повтора подряд
+      lastClip = i;
+      const src = sfxCtx.createBufferSource(), g = sfxCtx.createGain();
+      src.buffer = keysBuf;
+      src.playbackRate.value = tone * (0.96 + Math.random() * 0.08);
+      g.gain.value = vol;
+      src.connect(g).connect(sfxCtx.destination);
+      src.start(sfxCtx.currentTime + delay, i * SLOT, SLOT);
+    } catch (e) {}
+  }
+
+  let toastTimer;
+  function toast(text, color, ms = 1800) {
+    const el = $('toast');
+    el.textContent = text;
+    el.style.color = color;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+  }
+
+  function setStatus(text, bad) {
+    const el = $('status');
+    el.textContent = text || '';
+    el.classList.toggle('on', !!text);
+    el.classList.toggle('bad', !!bad);
+  }
+
+  // ---------- Распознавание речи (Vosk, офлайн) ----------
+  // Слушает одна русская модель; английские названия записаны так, как она их слышит
+  // ---------- Отрисовка состояния ----------
+  let wantListening = false, testMode = false;
+  function render({ state: s, event, spell, reason, aim, transcript, level }) {
+    if(typeof level==='number')$('level').style.width=Math.min(100,level)+'%';
+    if(typeof transcript==='string')$('partial').textContent=transcript||'назови способность…';
+    testMode = !!s.testOnly;
+    wantListening = s.enabled && s.voiceReady && (s.listening || s.testOnly);
+    // При постоянном прослушивании индикатор не показываем, чтобы не висел весь матч
+    const micShown = wantListening && !!s.talkKey && s.voiceReady;
+    $('mic').classList.toggle('on', micShown);
+    if (event === 'listen') {
+      $('partial').textContent = 'назови способность…';
+      $('partial').classList.remove('heard');
+      if (micShown) keyClick({ vol: 0.12, tone: 1.2 }); // тихий высокий щелчок — микрофон открыт
+    }
+
+    if ((event === 'cast' || event === 'preview') && spell) {
+      /** @type {HTMLImageElement} */ ($('castIcon')).src = ICON(spell.base || spell.id);
+      $('castName').textContent = spell.name;
+      const el = $('cast');
+      // Над прицелом; у краёв экрана плашка не уезжает за него
+      if (aim) {
+        el.style.left = `clamp(130px, ${aim.x * 100}%, calc(100% - 130px))`;
+        el.style.top = `max(calc(${aim.y * 100}% - 40px), 74px)`;
+      }
+      el.classList.remove('show');
+      void el.offsetWidth;
+      el.classList.add('show');
+    }
+    if (event === 'item') toast(spell.name, '#6fbf45', 1800);
+    if (event === 'prepared') toast('Подготовлено: ' + spell.name, '#6fbf45', 1800);
+    if (event === 'prepare-unconfirmed') toast('Invoke отправлен: ' + spell.name + ' (нет GSI)', '#ff9a2e', 1800);
+    if (event === 'refuse') {
+      toast(reason, '#ff9a2e', 2500);
+      keyClick({ vol: 0.2, tone: 0.6 }); // глухой низкий щелчок
+    }
+    if (event === 'blocked') {
+      toast('Только голосом!', '#e0463a', 1200);
+      keyClick({ vol: 0.18, tone: 0.6 });
+    }
+    if (event === 'profile') {
+      const label = { normal: 'Обычный режим', fast: 'Ускоренный режим', turbo: 'Турбо-режим' }[s.timingProfile] || 'Обычный режим';
+      toast(label, s.timingProfile === 'turbo' ? '#e0463a' : s.timingProfile === 'fast' ? '#ff9a2e' : '#6fbf45', 1800);
+    }
+    if (event === 'toggle') {
+      toast(s.enabled ? 'Голосовой каст ВКЛ' : 'Голосовой каст ВЫКЛ', s.enabled ? '#6fbf45' : '#7d8a94');
+      keyClick({ vol: 0.22, tone: s.enabled ? 1.1 : 0.8 });
+    }
+  }
+
+  const es = new EventSource('/events');
+  es.onmessage = (e) => render(JSON.parse(e.data));
+</script>
+</body>
+</html>

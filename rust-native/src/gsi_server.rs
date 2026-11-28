@@ -50,13 +50,20 @@ pub struct Server {
     pub address: std::net::SocketAddr,
 }
 impl Server {
-    pub fn start(c:&Config)->std::io::Result<Self>{
+    pub fn start(c:&Config)->std::io::Result<Self>{Self::start_with_ui(c,|_|Router::new())}
+    pub fn start_with_ui(c:&Config,make_ui:impl FnOnce(GsiState)->Router)->std::io::Result<Self>{
         let listener=std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,c.port))?;
         listener.set_nonblocking(true)?;
         let address=listener.local_addr()?;
         let rt=tokio::runtime::Builder::new_current_thread().enable_all().build()?;
         let (stop,rx)=std::sync::mpsc::channel();
-        let state=GsiState::new(c);let serve_state=state.clone();
+        let state=GsiState::new(c);let app=router(state.clone()).merge(make_ui(state.clone())).layer(DefaultBodyLimit::max(256*1024)).layer(axum::middleware::from_fn(move |req:axum::extract::Request,next:axum::middleware::Next|async move{
+            let port=address.port();let local=[format!("127.0.0.1:{port}"),format!("localhost:{port}")];
+            let host=req.headers().get(axum::http::header::HOST).and_then(|v|v.to_str().ok());
+            let allowed_host=host.is_some_and(|h|local.iter().any(|a|a.eq_ignore_ascii_case(h)));
+            let allowed_origin=req.headers().get(axum::http::header::ORIGIN).is_none_or(|v|v.to_str().ok().is_some_and(|o|local.iter().any(|a|o==format!("http://{a}"))));
+            if !allowed_host||!allowed_origin{return StatusCode::FORBIDDEN.into_response();}next.run(req).await
+        }));
         let thread=std::thread::spawn(move||{
             rt.block_on(async move{
                 let Ok(listener)=tokio::net::TcpListener::from_std(listener)else{return;};
@@ -65,7 +72,7 @@ impl Server {
                     Err(std::sync::mpsc::TryRecvError::Empty)=>tokio::time::sleep(Duration::from_millis(25)).await,
                 }}};
                 // Dropping the server future closes connections without an indefinite graceful drain.
-                tokio::select!{_ = async {let _=axum::serve(listener,router(serve_state)).await;}=>{},_ = shutdown=>{}}
+                tokio::select!{_ = async {let _=axum::serve(listener,app).await;}=>{},_ = shutdown=>{}}
             });
         });
         Ok(Self{stop,thread:Some(thread),state,address})

@@ -9,6 +9,9 @@ pub struct Capture{
     pub rate:u32,
     pub name:String,
 }
+pub fn devices()->Vec<String>{
+    let mut names:Vec<_>=cpal::default_host().input_devices().ok().into_iter().flatten().filter_map(|d|d.name().ok()).collect();names.sort();names.dedup();names
+}
 impl Capture {
     pub fn open(name:Option<&str>,requested:Option<u32>,block:usize)->Result<Self,Box<dyn std::error::Error>>{
         let host=cpal::default_host();

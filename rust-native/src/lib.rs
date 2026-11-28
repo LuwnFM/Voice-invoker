@@ -20,6 +20,7 @@ pub mod recognition;
 pub mod speech;
 pub mod gsi;
 pub mod gsi_server;
+pub mod ui;
 #[cfg(windows)]
 pub mod win_input;
 pub mod engine;

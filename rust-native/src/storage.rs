@@ -21,12 +21,14 @@ fn copy_once(path: &Path, bytes: &[u8]) -> io::Result<bool> {
         Err(e) => Err(e.error),
     }
 }
+#[derive(Clone)]
 pub struct Store { directory: PathBuf }
 impl Store {
     pub fn open(directory: &Path) -> io::Result<Self> {
         fs::create_dir_all(directory)?;
         Ok(Self { directory: directory.canonicalize()? })
     }
+    pub fn directory(&self)->&Path{&self.directory}
     pub fn path(&self) -> PathBuf { self.directory.join("config.json") }
     pub fn migrate(&self, source: &Path) -> io::Result<bool> {
         if self.path().exists() { return Ok(false); }

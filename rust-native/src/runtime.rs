@@ -32,9 +32,10 @@ impl Runtime {
     pub fn begin(&mut self,now:u64)->Vec<i16>{
         self.speech.reset(now);self.listening=true;self.preroll.drain(..).collect()
     }
-    pub fn observe(&mut self,now:u64,text:&str,finalized:bool){
-        if !self.listening{return;}
-        for command in self.speech.observe(&self.parser,now,text,finalized){self.engine.enqueue(now,command);}
+    pub fn observe(&mut self,now:u64,text:&str,finalized:bool)->Vec<crate::recognition::Command>{
+        if !self.listening{return Vec::new();}
+        let commands=self.speech.observe(&self.parser,now,text,finalized);
+        for command in &commands{self.engine.enqueue(now,command.clone());}commands
     }
     pub fn end(&mut self,now:u64){
         if self.listening{for command in self.speech.end(&self.parser,now){self.engine.enqueue(now,command);}}
