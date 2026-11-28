@@ -15,7 +15,7 @@ hound = "3.5"
 tempfile = "3.23"
 notify = "8.2"
 axum = "0.8"
-tokio = { version = "1", features = ["rt", "net", "time"] }
+tokio = { version = "1", features = ["rt", "net", "time", "macros"] }
 
 [target.'cfg(windows)'.dependencies]
 cpal = "=0.15.3"

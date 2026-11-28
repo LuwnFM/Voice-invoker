@@ -12,10 +12,10 @@ use windows_sys::Win32::{
         WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_MBUTTONDOWN,WM_MBUTTONUP,WM_XBUTTONDOWN,WM_XBUTTONUP,WM_QUIT,
     },
 };
-const OWN_TAG:usize=0x564f4943;
-struct Context {state:InputState,config:Config,events:SyncSender<Event>}
+pub(crate) const OWN_TAG:usize=0x564f4943;
+struct Context {state:InputState,config:Config,events:SyncSender<Event>,overflow:std::sync::Arc<std::sync::atomic::AtomicBool>}
 thread_local!{static CONTEXT:RefCell<Option<Context>>=const{RefCell::new(None)};}
-fn focused(title:&str)->bool{
+pub fn focused(title:&str)->bool{
     if title.is_empty(){return false;} // fail closed: do not observe arbitrary windows
     let mut buffer=[0u16;256];
     // SAFETY: valid buffer and OS-owned foreground window handle.
@@ -33,7 +33,7 @@ fn handle(vk:u16,down:bool,injected:bool,own:bool){
             if let Some(ctx)=c.as_mut(){
                 if injected&&!ctx.config.accept_injected{return;}
                 let (_,event)=ctx.state.handle(vk,down,focused(&ctx.config.window_title));
-                if let Some(event)=event{let _=ctx.events.try_send(event);}
+                if let Some(event)=event{if ctx.events.try_send(event).is_err(){ctx.overflow.store(true,std::sync::atomic::Ordering::Release);}}
             }
         }
     });
@@ -68,14 +68,15 @@ unsafe extern "system" fn mouse(code:i32,w:WPARAM,l:LPARAM)->LRESULT{
 struct HookHandle(HHOOK);
 impl Drop for HookHandle{fn drop(&mut self){unsafe{UnhookWindowsHookEx(self.0);}}}
 pub struct Hook {
-    tid:u32,thread:Option<JoinHandle<io::Result<()>>>,pub events:Receiver<Event>,
+    tid:u32,thread:Option<JoinHandle<io::Result<()>>>,pub events:Receiver<Event>,pub overflow:std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Hook {
     pub fn start(config:Config)->io::Result<Self>{
         let (ready_tx,ready_rx)=sync_channel::<io::Result<u32>>(1);
         let (events_tx,events)=sync_channel(64);
+        let overflow=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));let flag=overflow.clone();
         let thread=thread::spawn(move||{
-            CONTEXT.with(|c|*c.borrow_mut()=Some(Context{state:InputState::new(&config),config,events:events_tx}));
+            CONTEXT.with(|c|*c.borrow_mut()=Some(Context{state:InputState::new(&config),config,events:events_tx,overflow:flag}));
             // SAFETY: this dedicated thread owns the Windows message queue and both hooks.
             unsafe{
                 let mut msg:MSG=std::mem::zeroed();
@@ -98,7 +99,7 @@ impl Hook {
             Ok(())
         });
         let tid=ready_rx.recv_timeout(Duration::from_secs(5)).map_err(|e|io::Error::other(e.to_string()))??;
-        Ok(Self{tid,thread:Some(thread),events})
+        Ok(Self{tid,thread:Some(thread),events,overflow})
     }
     fn finish(&mut self)->io::Result<()>{
         if let Some(thread)=self.thread.take(){
@@ -107,6 +108,7 @@ impl Hook {
         }
         Ok(())
     }
+    pub fn running(&self)->bool{self.thread.as_ref().is_some_and(|t|!t.is_finished())}
     pub fn stop(mut self)->io::Result<()>{self.finish()}
 }
 impl Drop for Hook{fn drop(&mut self){let _=self.finish();}}

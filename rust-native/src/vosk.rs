@@ -7,10 +7,11 @@ type ModelFree=unsafe extern "C" fn(*mut c_void);
 type RecNew=unsafe extern "C" fn(*mut c_void,f32,*const c_char)->*mut c_void;
 type RecFree=unsafe extern "C" fn(*mut c_void);
 type Accept=unsafe extern "C" fn(*mut c_void,*const i16,c_int)->c_int;
+type Reset=unsafe extern "C" fn(*mut c_void);
 type ResultFn=unsafe extern "C" fn(*mut c_void)->*const c_char;
 pub struct Vosk{
     recognizer:NonNull<c_void>,model:NonNull<c_void>,free_rec:RecFree,free_model:ModelFree,
-    accept:Accept,result:ResultFn,partial:ResultFn,final_result:ResultFn,_library:Library,
+    accept:Accept,result:ResultFn,partial:ResultFn,final_result:ResultFn,reset:Reset,_library:Library,
 }
 impl Vosk{
     pub fn new(dll:&Path,model_path:&Path,rate:u32,grammar:&[String])->Result<Self,Box<dyn std::error::Error>>{
@@ -35,9 +36,10 @@ impl Vosk{
             let result:ResultFn=*library.get(b"vosk_recognizer_result\0")?;
             let partial:ResultFn=*library.get(b"vosk_recognizer_partial_result\0")?;
             let final_result:ResultFn=*library.get(b"vosk_recognizer_final_result\0")?;
+            let reset:Reset=*library.get(b"vosk_recognizer_reset\0")?;
             let model=NonNull::new(create_model(path.as_ptr())).ok_or("Vosk model load failed")?;
             let Some(recognizer)=NonNull::new(create_rec(model.as_ptr(),rate as f32,grammar.as_ptr()))else{free_model(model.as_ptr());return Err("Vosk recognizer creation failed".into());};
-            Ok(Self{recognizer,model,free_rec,free_model,accept,result,partial,final_result,_library:library})
+            Ok(Self{recognizer,model,free_rec,free_model,accept,result,partial,final_result,reset,_library:library})
         }
     }
     fn text(&mut self,f:ResultFn,field:&str)->Result<String,Box<dyn std::error::Error>>{
@@ -51,6 +53,7 @@ impl Vosk{
         let result=unsafe{(self.accept)(self.recognizer.as_ptr(),pcm.as_ptr(),len)};
         match result{0=>Ok((false,self.text(self.partial,"partial")?)),1=>Ok((true,self.text(self.result,"text")?)),_=>Err("Vosk accept failed".into())}
     }
+    pub fn reset(&mut self){unsafe{(self.reset)(self.recognizer.as_ptr());}}
     pub fn finish(&mut self)->Result<String,Box<dyn std::error::Error>>{self.text(self.final_result,"text")}
 }
 impl Drop for Vosk{

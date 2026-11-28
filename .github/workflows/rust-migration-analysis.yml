@@ -24,10 +24,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/rust-anything-report"
-          npm exec --yes --package rust-anything@4.1.0 -- rust-anything --version
-          npm exec --yes --package rust-anything@4.1.0 -- rust-anything analyze . --whole-app --json > "$RUNNER_TEMP/rust-anything-report/analysis.json"
+          version="$(npm view rust-anything dist-tags.latest)"
+          printf '%s\n' "$version" | tee "$RUNNER_TEMP/rust-anything-report/version.txt"
+          npm exec --yes --package "rust-anything@$version" -- rust-anything --version
+          npm exec --yes --package "rust-anything@$version" -- rust-anything analyze . --whole-app --json > "$RUNNER_TEMP/rust-anything-report/analysis.json"
           python -m json.tool "$RUNNER_TEMP/rust-anything-report/analysis.json" > /dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: rust-anything-migration-plan
-          path: ${{ runner.temp }}/rust-anything-report/analysis.json
+          path: ${{ runner.temp }}/rust-anything-report/

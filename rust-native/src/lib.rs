@@ -1,4 +1,11 @@
 pub mod audio;
+pub mod runtime;
+#[cfg(windows)]
+pub mod capture;
+#[cfg(windows)]
+pub mod win_execute;
+#[cfg(windows)]
+pub mod desktop;
 pub mod parity;
 pub mod bindings;
 pub mod binding_watch;

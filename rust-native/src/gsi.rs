@@ -1,16 +1,16 @@
 use crate::{catalog::{Spell,ITEM_KEYS},config::{Config,Mode},input::{Action,vk_of}};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-#[derive(Debug,Default,Deserialize)]
+#[derive(Debug,Clone,Default,Deserialize)]
 #[serde(default)]
 pub struct Ability {pub name:String,pub cooldown:Option<f64>,pub can_cast:Option<bool>,pub passive:bool}
-#[derive(Debug,Default,Deserialize)]
+#[derive(Debug,Clone,Default,Deserialize)]
 #[serde(default)]
 pub struct Hero{pub name:String,pub alive:bool,pub aghanims_scepter:Option<bool>}
-#[derive(Debug,Default,Deserialize)]
+#[derive(Debug,Clone,Default,Deserialize)]
 #[serde(default)]
 pub struct Packet {pub auth:Auth,pub hero:Hero,pub abilities:BTreeMap<String,Ability>,pub items:BTreeMap<String,Ability>}
-#[derive(Debug,Default,Deserialize)]
+#[derive(Debug,Clone,Default,Deserialize)]
 #[serde(default)]
 pub struct Auth{pub token:String}
 #[derive(Debug,PartialEq,Eq)]

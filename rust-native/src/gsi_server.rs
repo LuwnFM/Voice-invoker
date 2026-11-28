@@ -7,7 +7,7 @@ use std::{sync::{Arc,Mutex},time::{Duration,Instant}};
 pub struct GsiState {token:Arc<str>, latest:Arc<Mutex<Option<(Instant,Packet)>>>}
 impl GsiState{
     pub fn new(c:&Config)->Self{Self{token:Arc::from(c.auth_token.as_str()),latest:Arc::new(Mutex::new(None))}}
-    pub fn take(&self)->Option<(Instant,Packet)>{self.latest.lock().ok()?.take()}
+    pub fn snapshot(&self)->Option<(Instant,Packet)>{self.latest.lock().ok()?.clone()}
 }
 async fn receive(State(state):State<GsiState>,headers:HeaderMap,Json(packet):Json<Packet>)->StatusCode{
     // GSI is a native game client. Browser cross-origin calls are not accepted.
@@ -41,4 +41,37 @@ pub fn monitor(c:&Config,seconds:u64)->Result<(),Box<dyn std::error::Error>>{
         if let Ok(result)=result{result?;}
         Ok(())
     })
+}
+
+pub struct Server {
+    stop: std::sync::mpsc::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    pub state: GsiState,
+    pub address: std::net::SocketAddr,
+}
+impl Server {
+    pub fn start(c:&Config)->std::io::Result<Self>{
+        let listener=std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,c.port))?;
+        listener.set_nonblocking(true)?;
+        let address=listener.local_addr()?;
+        let rt=tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let (stop,rx)=std::sync::mpsc::channel();
+        let state=GsiState::new(c);let serve_state=state.clone();
+        let thread=std::thread::spawn(move||{
+            rt.block_on(async move{
+                let Ok(listener)=tokio::net::TcpListener::from_std(listener)else{return;};
+                let shutdown=async move{loop{match rx.try_recv(){
+                    Ok(())|Err(std::sync::mpsc::TryRecvError::Disconnected)=>break,
+                    Err(std::sync::mpsc::TryRecvError::Empty)=>tokio::time::sleep(Duration::from_millis(25)).await,
+                }}};
+                // Dropping the server future closes connections without an indefinite graceful drain.
+                tokio::select!{_ = async {let _=axum::serve(listener,router(serve_state)).await;}=>{},_ = shutdown=>{}}
+            });
+        });
+        Ok(Self{stop,thread:Some(thread),state,address})
+    }
+    pub fn running(&self)->bool{self.thread.as_ref().is_some_and(|t|!t.is_finished())}
+}
+impl Drop for Server {
+    fn drop(&mut self){let _=self.stop.send(());if let Some(t)=self.thread.take(){let _=t.join();}}
 }

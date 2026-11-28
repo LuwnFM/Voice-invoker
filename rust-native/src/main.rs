@@ -57,10 +57,17 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             voice_invoker_native::gsi_server::monitor(&cfg,seconds)?;
         },
         #[cfg(windows)]
+        Some("session") if (4..=6).contains(&args.len())=>{
+            let config=Config::load(Path::new(&args[3]))?;
+            let live=args.iter().skip(4).any(|s|s=="--live");
+            let seconds=args.iter().skip(4).find(|s|s.as_str()!="--live").map(|s|s.parse()).transpose()?.unwrap_or(300);
+            voice_invoker_native::desktop::run(Path::new(&args[1]),Path::new(&args[2]),config,live,seconds)?;
+        },
+        #[cfg(windows)]
         Some("hook-smoke") if args.len()==1=>voice_invoker_native::win_input::smoke()?,
         #[cfg(windows)]
         Some("microphone") if (3..=7).contains(&args.len())=>microphone(&args)?,
-        _=>{println!("Native prototype — NO keyboard or mouse injection.\nverify-model ARCHIVE\nextract-model ARCHIVE NEW_DIR\nparse TEXT\ngsi-monitor PORT [SECONDS=15]\nhook-smoke (Windows, observe only)\nrecognize-wav DLL MODEL_DIR WAV [BLOCK=512] [CONFIG]\nmicrophone DLL MODEL_DIR [SECONDS=15] [BLOCK=512] [DEVICE_NAME] [--rate=16000|48000|auto]");}
+        _=>{println!("Native prototype — dry run by default; session --live enables experimental game input.\nverify-model ARCHIVE\nextract-model ARCHIVE NEW_DIR\nparse TEXT\ngsi-monitor PORT [SECONDS=15]\nsession DLL MODEL_DIR CONFIG [SECONDS=300] [--live] (Windows; experimental)\nhook-smoke (Windows, observe only)\nrecognize-wav DLL MODEL_DIR WAV [BLOCK=512] [CONFIG]\nmicrophone DLL MODEL_DIR [SECONDS=15] [BLOCK=512] [DEVICE_NAME] [--rate=16000|48000|auto]");}
     }
     Ok(())
 }
