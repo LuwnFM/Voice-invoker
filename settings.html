@@ -496,14 +496,14 @@
   }
   $('#wordFind').onclick=async()=>{try{const q=$('#wordSearch').value;const d=await (await fetch('/dictionary?q='+encodeURIComponent(q))).json();$('#wordResults').textContent=d.ready?(d.exact?'Слово есть. ':'')+(d.matches.join(', ')||'Нет совпадений'):'Словарь недоступен';}catch(e){status(e.message,'bad');}};
   $('#copyLaunchFlag').onclick=async()=>{try{const r=await fetch('/copy-launch-flag',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!r.ok)throw Error('HTTP '+r.status);status('Скопировано. Steam → Dota 2 → Свойства → Параметры запуска: добавь к существующим.','ok');}catch(e){status(e.message,'bad');}};
-  function applyModeControls(modes){for(const [id,mode] of Object.entries(modes)){const el=$('#'+id+'Mode')||document.querySelector('[data-item-mode="'+id+'"]');if(el)el.value=String(mode);}}
+  function applyModeControls(modes){for(const id of ['slot1','slot2'])$('#'+id+'Mode').value=modes[id]||'';for(const el of /** @type {NodeListOf<HTMLSelectElement>} */ (document.querySelectorAll('[data-item-mode]')))el.value=modes[el.dataset.itemMode]||'quickcast';}
   function bindingSnapshot(){return JSON.stringify([state.keys,state.voice,$('#slot1Mode').value,$('#slot2Mode').value,[.../** @type {NodeListOf<HTMLSelectElement>} */ (document.querySelectorAll('[data-item-mode]'))].map(e=>e.value)]);}
   $('#importBinds').onclick=async()=>{
     try{const d=await (await fetch('/import-bindings',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();if(!d.ok)throw Error(d.error);
       const {voice,...keys}=d.keys;Object.assign(state.keys,keys);if(voice)state.voice=voice;
-      for(const [id,mode] of Object.entries(d.slotCastModes)){const el=$('#'+id+'Mode')||document.querySelector('[data-item-mode="'+id+'"]');if(el)el.value=mode;}
+      if($('#syncQuickcast').checked)applyModeControls(d.slotCastModes);
       loadedBindingGeneration=d.bindingGeneration;loadedBindingSnapshot=bindingSnapshot();
-      render();status('Импортировано '+Object.keys(d.keys).length+' клавиш. Проверь и сохрани. '+d.warnings.join('; '),d.warnings.length?'bad':'ok');
+      render();status('Импортировано '+Object.keys(d.keys).length+' клавиш. Проверь и сохрани. '+d.warnings.join('; ')+(!voice?' Голосовой чат Dota не назначен; клавиша прослушивания сохранена.':''),d.warnings.length?'bad':'ok');
     }catch(e){status('Импорт: '+e.message,'bad');}
   };
   function addItemMode(name='',mode='quickcast'){
