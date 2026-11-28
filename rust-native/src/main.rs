@@ -41,6 +41,15 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             let config=store.load()?;
             println!("{}",serde_json::json!({"copied":copied,"ready":config.is_some()}));
         },
+        Some("gsi-install") if args.len()==3=>{
+            let config=Config::load(Path::new(&args[2]))?;
+            let dir=voice_invoker_native::storage::native_directory()?;
+            println!("{:?}",voice_invoker_native::integration::install(Path::new(&args[1]),&dir,&config)?);
+        },
+        Some("gsi-remove") if args.len()==1=>{
+            let dir=voice_invoker_native::storage::native_directory()?;
+            println!("{:?}",voice_invoker_native::integration::remove(&dir)?);
+        },
         Some("inspect-steam") if (2..=3).contains(&args.len())=>{
             let steam=Path::new(&args[1]);
             let active=args.get(2).map(|s|s.parse()).transpose()?;
@@ -61,7 +70,7 @@ fn run()->Result<(),Box<dyn std::error::Error>>{
             let config=Config::load(Path::new(&args[3]))?;
             let live=args.iter().skip(4).any(|s|s=="--live");
             let seconds=args.iter().skip(4).find(|s|s.as_str()!="--live").map(|s|s.parse()).transpose()?.unwrap_or(300);
-            voice_invoker_native::desktop::run(Path::new(&args[1]),Path::new(&args[2]),config,live,seconds)?;
+            voice_invoker_native::desktop::run(Path::new(&args[1]),Path::new(&args[2]),config,Path::new(&args[3]),live,seconds)?;
         },
         #[cfg(windows)]
         Some("hook-smoke") if args.len()==1=>voice_invoker_native::win_input::smoke()?,

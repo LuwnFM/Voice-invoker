@@ -40,6 +40,7 @@ impl Runtime {
         if self.listening{for command in self.speech.end(&self.parser,now){self.engine.enqueue(now,command);}}
         self.listening=false;
     }
+    pub fn abort_speech(&mut self,now:u64){self.listening=false;self.preroll.clear();self.speech.reset(now);}
     pub fn listening(&self)->bool{self.listening}
     pub fn poll(&mut self,now:u64)->Option<Dispatch>{self.engine.poll(now)}
     pub fn ack(&mut self,id:u64,ok:bool,now:u64)->bool{self.engine.acknowledge(id,ok,now)}

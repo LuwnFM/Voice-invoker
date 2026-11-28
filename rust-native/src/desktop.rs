@@ -1,7 +1,7 @@
 //! Experimental unified Windows session. Dry run by default; live mode explicit.
 use crate::{catalog,config::Config,capture::Capture,gsi_server::Server,recognition::Parser,model,vosk::Vosk,runtime::Runtime,win_input::{Hook,focused},win_execute::Execution,input::Event};
 use std::{path::Path,sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
-pub fn run(dll:&Path,model_path:&Path,mut config:Config,live:bool,seconds:u64)->Result<(),Box<dyn std::error::Error>>{
+pub fn run(dll:&Path,model_path:&Path,mut config:Config,config_path:&Path,live:bool,seconds:u64)->Result<(),Box<dyn std::error::Error>>{
     if !(1..=86400).contains(&seconds){return Err("Session seconds must be 1..86400".into());}
     let live=live&&!config.test_only;
     let words=model::read_words(model_path)?;
@@ -15,7 +15,8 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,live:bool,seconds:u64)->
     let server=Server::start(&config)?;
     let arm=Arc::new(AtomicBool::new(false));
     let hook=Hook::start_session(config.clone(),live,arm.clone())?;
-    let always=config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
+    let mut always=config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
+    let native_store=crate::storage::native_directory().ok().and_then(|dir|crate::storage::Store::open(&dir).ok()).filter(|store|store.path().canonicalize().ok().zip(config_path.canonicalize().ok()).is_some_and(|(a,b)|a==b));
     let mut runtime=Runtime::new(config.clone(),parser,capture.rate);
     let mut active:Option<Execution>=None;let mut last_packet=None;
     let watcher=crate::steam::automatic_steam().and_then(|(path,id)|crate::steam::inspect(&path,id).binding_file).and_then(|path|crate::binding_watch::BindingWatch::new(&path).ok());
@@ -55,11 +56,12 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,live:bool,seconds:u64)->
         if active.is_none()&&runtime.idle(){if let Some(next)=pending.take(){
             arm.store(false,Ordering::Release);hook.update(next.clone())?;runtime.replace_bindings(&next,now);vosk.reset();require_release=true;config=next;
             // During migration only the isolated native store is eligible for automatic writes.
-            if let Ok(dir)=crate::storage::native_directory(){if let Ok(store)=crate::storage::Store::open(&dir){if store.path().is_file(){if let Err(e)=store.save(&config){eprintln!("Bindings active but not saved: {e}");}}}}
+            always=config.listen=="always"||config.voice_chat_key.is_empty()||config.test_only;
+            if let Some(store)=&native_store{if let Err(e)=store.save(&config){eprintln!("Bindings active but not saved: {e}");}}
             println!("Bindings updated without restart");
         }}
         let (enabled,ptt,chat)=hook.snapshot();runtime.enabled(enabled,now);
-        let game=focused(&config.window_title);
+        let game=if live{crate::win_input::dota_focused(&config.window_title)}else{focused(&config.window_title)};
         let allowed=enabled&&!chat&&(game||(!live&&always));
         arm.store(live&&allowed&&pending.is_none()&&refresh_at.is_none(),Ordering::Release);
         if !ptt{require_release=false;}
@@ -73,13 +75,13 @@ pub fn run(dll:&Path,model_path:&Path,mut config:Config,live:bool,seconds:u64)->
             vosk.reset();let pre=runtime.begin(now);
             if !pre.is_empty(){let (finalized,text)=vosk.feed(&pre)?;runtime.observe(now,&text,finalized);}
         }else if !want&&runtime.listening(){
-            if pending.is_some()||refresh_at.is_some(){runtime.ready(false,now);runtime.ready(allowed,now);vosk.reset();}else{let text=vosk.finish()?;runtime.observe(now,&text,true);runtime.end(now);vosk.reset();}
+            if pending.is_some()||refresh_at.is_some(){runtime.abort_speech(now);vosk.reset();}else{let text=vosk.finish()?;runtime.observe(now,&text,true);runtime.end(now);vosk.reset();}
         }
         // Drain a small bounded batch so input scheduling cannot starve.
         for _ in 0..4{
             let Ok(pcm)=capture.blocks.try_recv()else{break;};
             if runtime.listening(){let (finalized,text)=vosk.feed(&pcm)?;runtime.observe(now,&text,finalized);}
-            else if allowed{runtime.idle_audio(&pcm);}
+            else if allowed&&pending.is_none()&&refresh_at.is_none(){runtime.idle_audio(&pcm);}
         }
         if let Some(x)=active.as_mut(){
             if let Some(ok)=x.tick(now,&config.window_title,allowed){

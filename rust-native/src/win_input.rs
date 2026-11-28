@@ -3,10 +3,10 @@
 use crate::{config::Config,input::{Event,InputState}};
 use std::{cell::RefCell,io,ptr::{null,null_mut},sync::{Arc,atomic::{AtomicBool,AtomicU32,Ordering},mpsc::{sync_channel,Receiver,SyncSender}},collections::BTreeSet,thread::{self,JoinHandle},time::Duration};
 use windows_sys::Win32::{
-    Foundation::{LPARAM,LRESULT,WPARAM},
-    System::{LibraryLoader::GetModuleHandleW,Threading::GetCurrentThreadId},
+    Foundation::{CloseHandle,LPARAM,LRESULT,WPARAM},
+    System::{LibraryLoader::GetModuleHandleW,Threading::{GetCurrentThreadId,OpenProcess,QueryFullProcessImageNameW,PROCESS_QUERY_LIMITED_INFORMATION}},
     UI::WindowsAndMessaging::{
-        CallNextHookEx,GetForegroundWindow,GetMessageW,GetWindowTextW,PeekMessageW,PostThreadMessageW,
+        CallNextHookEx,GetForegroundWindow,GetMessageW,GetWindowTextW,GetWindowThreadProcessId,PeekMessageW,PostThreadMessageW,
         SetWindowsHookExW,UnhookWindowsHookEx,HHOOK,KBDLLHOOKSTRUCT,MSLLHOOKSTRUCT,MSG,
         LLKHF_INJECTED,LLMHF_INJECTED,PM_NOREMOVE,WH_KEYBOARD_LL,WH_MOUSE_LL,
         WM_KEYDOWN,WM_KEYUP,WM_SYSKEYDOWN,WM_SYSKEYUP,WM_MBUTTONDOWN,WM_MBUTTONUP,WM_XBUTTONDOWN,WM_XBUTTONUP,WM_QUIT,WM_APP,
@@ -29,6 +29,21 @@ pub fn focused(title:&str)->bool{
         n>0&&String::from_utf16_lossy(&buffer[..n as usize])==title
     }
 }
+/// Live input must target the actual Dota process, not merely a matching title.
+pub fn dota_focused(title:&str)->bool{
+    if !focused(title){return false;}
+    unsafe{
+        let hwnd=GetForegroundWindow();
+        let mut pid=0;GetWindowThreadProcessId(hwnd,&mut pid);
+        if pid==0{return false;}
+        let process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,pid);
+        if process.is_null(){return false;}
+        let mut buf=[0u16;1024];let mut len=buf.len() as u32;
+        let ok=QueryFullProcessImageNameW(process,0,buf.as_mut_ptr(),&mut len)!=0;
+        CloseHandle(process);
+        ok&&GetForegroundWindow()==hwnd&&std::path::Path::new(&String::from_utf16_lossy(&buf[..len as usize])).file_name().is_some_and(|n|n.to_string_lossy().eq_ignore_ascii_case("dota2.exe"))
+    }
+}
 fn handle(vk:u16,down:bool,injected:bool,own:bool)->bool{
     if own{return false;}
     CONTEXT.with(|c|{
@@ -41,7 +56,7 @@ fn handle(vk:u16,down:bool,injected:bool,own:bool)->bool{
         if !down{return ctx.suppressed.remove(&vk);}
         if ctx.suppressed.contains(&vk){return true;}
         let hotkey=matches!(event,Some(Event::Toggle|Event::Quit|Event::Settings|Event::Profile(_)));
-        if ctx.live&&swallow&&(hotkey||ctx.arm.load(Ordering::Acquire)&&matches!(event,Some(Event::Blocked))){
+        if ctx.live&&swallow&&(hotkey||ctx.arm.load(Ordering::Acquire)&&matches!(event,Some(Event::Blocked))&&dota_focused(&ctx.config.window_title)){
             ctx.suppressed.insert(vk);return true;
         }
         false

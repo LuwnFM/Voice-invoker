@@ -1,5 +1,5 @@
 //! Native input adapter with focus checks, acknowledgement and release on cancellation.
-use crate::{engine::Dispatch,input::Step,win_input::{focused,OWN_TAG}};
+use crate::{engine::Dispatch,input::Step,win_input::{dota_focused,OWN_TAG}};
 use std::{collections::BTreeSet,io,mem::size_of};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput,INPUT,INPUT_0,INPUT_KEYBOARD,INPUT_MOUSE,KEYBDINPUT,MOUSEINPUT,KEYEVENTF_KEYUP,KEYEVENTF_EXTENDEDKEY,KEYEVENTF_SCANCODE,MapVirtualKeyW,MAPVK_VK_TO_VSC,MOUSEEVENTF_LEFTDOWN,MOUSEEVENTF_LEFTUP,MOUSEEVENTF_MIDDLEDOWN,MOUSEEVENTF_MIDDLEUP,MOUSEEVENTF_XDOWN,MOUSEEVENTF_XUP};
 
@@ -52,7 +52,7 @@ impl Execution{
         Err(io::Error::last_os_error())
     }
     pub fn tick(&mut self,now:u64,title:&str,allowed:bool)->Option<bool>{
-        if !allowed||(self.live&&!focused(title)){return Some(false);}
+        if !allowed||(self.live&&!dota_focused(title)){return Some(false);}
         if now<self.deadline{return None;}
         while let Some(step)=self.dispatch.steps.get(self.index).copied(){
             let result=match step{
@@ -66,7 +66,7 @@ impl Execution{
             if let Some(next)=self.dispatch.steps.get(self.index).copied(){
                 let delay=wait(next);self.deadline=now.saturating_add(delay);
                 if delay>0{return None;}
-                if self.live&&!focused(title){return Some(false);}
+                if self.live&&!dota_focused(title){return Some(false);}
             }
         }
         Some(self.held.is_empty())
