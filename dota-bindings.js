@@ -40,10 +40,33 @@ function parseVdf(text){
  }
 }
 function readVdfFile(file){
- const bytes=fs.readFileSync(file);
+ // fs.readFileSync defaults to read-only. The watcher retries transient
+ // sharing errors and incomplete atomic replacements without writing Steam.
+ const bytes=fs.readFileSync(file,{flag:'r'});
  if(bytes[0]===0xff&&bytes[1]===0xfe)return bytes.subarray(2).toString('utf16le');
  if(bytes[0]===0xfe&&bytes[1]===0xff)return Buffer.from(bytes.subarray(2)).swap16().toString('utf16le');
  return bytes.toString('utf8');
+}
+const BINDING_SUFFIX=path.join('570','remote','cfg','dotakeys_personal.lst');
+function chooseSteamAccount(steam,active){
+ const root=path.join(steam,'userdata');
+ const ids=fs.readdirSync(root).filter(id=>/^\d+$/.test(id)&&id!=='0');
+ // An explicit nonzero registry account is authoritative. Never import another
+ // account when its folder or binding file is missing.
+ if(active!==undefined&&active!==null&&String(active).trim()!==''){
+   try{const id=String(BigInt(active));if(id!=='0')return ids.includes(id)?id:null;}
+   catch{return null;}
+ }
+ if(ids.length===1)return ids[0];
+ // MostRecent is a saved login hint, not proof of an active session.
+ // Accept only one flagged account, with a matching existing Dota binding file.
+ try{
+   const users=parseVdf(readVdfFile(path.join(steam,'config','loginusers.vdf'))).users;
+   const recent=Object.entries(users||{}).filter(([id,user])=>/^\d{17}$/.test(id)&&user?.mostrecent==='1');
+   if(recent.length!==1)return null;
+   const id=String(BigInt(recent[0][0])-76561197960265728n);
+   return ids.includes(id)&&fs.existsSync(path.join(root,id,BINDING_SUFFIX))?id:null;
+ }catch{return null;}
 }
 const actions={quas:'abilityprimary1',wex:'abilityprimary2',exort:'abilityprimary3',invoke:'abilityultimate',slot1:'abilitysecondary1',slot2:'abilitysecondary2',voice:'chatvoiceteam',selectHero:'heroselect',neutral:'inventoryneutral',teleport:'inventorytp',...Object.fromEntries(Array.from({length:6},(_,i)=>['item'+(i+1),'inventory'+(i+1)]))};
 const aliases={uparrow:'UP',downarrow:'DOWN',leftarrow:'LEFT',rightarrow:'RIGHT',kp_multiply:'NUM*',kp_plus:'NUM+',kp_minus:'NUM-',kp_del:'NUM.',kp_slash:'NUM/',semicolon:';',key_cyrillic_be:',',key_cyrillic_yu:'.',key_cyrillic_e:"'",key_cyrillic_zhe:';',key_cyrillic_ha:'[',key_cyrillic_hard_sign:']',key_cyrillic_yo:'`'};
@@ -84,13 +107,8 @@ function steamRoot(){
 }
 function importBindings(){
  const steam=steamRoot();if(!steam)throw Error('Steam не найден');
- const root=path.join(steam,'userdata'),suffix=path.join('570','remote','cfg','dotakeys_personal.lst');
- const users=fs.readdirSync(root).filter(id=>/^\d+$/.test(id)&&fs.existsSync(path.join(root,id,suffix)));
- let active=registry('HKCU\\Software\\Valve\\Steam\\ActiveProcess','ActiveUser');
- if(active)try{active=String(BigInt(active));}catch{active=null;}
- if(!users.includes(active)) {
-   if(users.length===1)active=users[0];else throw Error('Несколько аккаунтов Steam: войди в нужный аккаунт и повтори импорт');
- }
- return readBindings(readVdfFile(path.join(root,active,suffix)));
+ const active=chooseSteamAccount(steam,registry('HKCU\\Software\\Valve\\Steam\\ActiveProcess','ActiveUser'));
+ if(!active)throw Error('Не удалось однозначно определить аккаунт Steam; войди в нужный аккаунт и повтори импорт');
+ return readBindings(readVdfFile(path.join(steam,'userdata',active,BINDING_SUFFIX)));
 }
-module.exports={parseVdf,readVdfFile,readBindings,importBindings};
+module.exports={parseVdf,readVdfFile,readBindings,importBindings,chooseSteamAccount,BINDING_SUFFIX};

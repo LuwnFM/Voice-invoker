@@ -2,17 +2,10 @@
 // separately. Never edit Steam, close the game or apply input.
 const {execFile}=require('node:child_process');
 const fs=require('node:fs'),path=require('node:path');
-const {parseVdf,readBindings,readVdfFile}=require('./dota-bindings');
+const {parseVdf,readBindings,readVdfFile,chooseSteamAccount,BINDING_SUFFIX}=require('./dota-bindings');
 const flag=/ (?:-gamestateintegration)(?=\s|$)/i;
 const hasFlag=value=>flag.test(' '+String(value||'').trim());
-function chooseAccount(steam,active){
- const root=path.join(steam,'userdata');
- const ids=fs.readdirSync(root).filter(id=>/^\d+$/.test(id)&&id!=='0');
- if(active!==undefined&&active!==null)try{const id=String(BigInt(active));if(ids.includes(id))return id;}catch{}
- // Do not guess if multiple accounts are present. MostRecent is a saved
- // preference and not proof of the active account.
- return ids.length===1?ids[0]:null;
-}
+const chooseAccount=chooseSteamAccount;
 function savedLaunchOptions(text){
  const store=parseVdf(text).userlocalconfigstore;
  const apps=store?.software?.valve?.steam?.apps;
@@ -25,12 +18,12 @@ function discoverDota(steam,exe){
  if(!steam)return null;
  const libs=[steam];
  try{
-  const v=parseVdf(fs.readFileSync(path.join(steam,'steamapps','libraryfolders.vdf'),'utf8')).libraryfolders;
+  const v=parseVdf(readVdfFile(path.join(steam,'steamapps','libraryfolders.vdf'))).libraryfolders;
   for(const entry of Object.values(v||{}))if(entry&&typeof entry==='object'&&entry.path)libs.push(entry.path);
  }catch{}
  for(const lib of libs){
   const apps=path.join(lib,'steamapps');
-  try{const install=parseVdf(fs.readFileSync(path.join(apps,'appmanifest_570.acf'),'utf8')).appstate?.installdir;
+  try{const install=parseVdf(readVdfFile(path.join(apps,'appmanifest_570.acf'))).appstate?.installdir;
    if(install&&valid(path.join(apps,'common',install)))return path.join(apps,'common',install);
   }catch{}
   const standard=path.join(apps,'common','dota 2 beta');if(valid(standard))return standard;
@@ -43,9 +36,9 @@ function inspectSteam(steam,active){
   const id=chooseAccount(steam,active);
   if(!id)return {savedLaunchFlag:null,bindings:null,bindingsIssue:'account-unknown'};
   const root=path.join(steam,'userdata',id);
-  const bindingFile=path.join(root,'570','remote','cfg','dotakeys_personal.lst');
+  const bindingFile=path.join(root,BINDING_SUFFIX);
   let savedLaunchFlag=null;
-  try{savedLaunchFlag=savedLaunchOptions(fs.readFileSync(path.join(root,'config','localconfig.vdf'),'utf8'));}catch{}
+  try{savedLaunchFlag=savedLaunchOptions(readVdfFile(path.join(root,'config','localconfig.vdf')));}catch{}
   try{
    const bindings=readBindings(readVdfFile(bindingFile));
    return {savedLaunchFlag,bindings,bindingsIssue:null,bindingFile};

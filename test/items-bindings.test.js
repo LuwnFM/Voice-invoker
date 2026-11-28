@@ -83,3 +83,14 @@ test('named items follow inventory and refuse absent or stale data',()=>{
  assert.equal(planItem(s,{...g,items:[item,null]},c,false,101).itemSlot,1);
  assert.ok(planItem(s,{...g,items:[]},c,false,101).refuse);assert.ok(planItem(s,g,c,false,6000).refuse);
 });
+
+test('VDF reader handles UTF8 BOM and both UTF16 byte orders',()=>{
+ const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+ const {readVdfFile}=require('../dota-bindings');const dir=fs.mkdtempSync(path.join(os.tmpdir(),'vi-vdf-'));
+ try{
+   const file=path.join(dir,'fixture.lst'),sample='KeyBindings { Keys { HeroSelect { Key F1 } AbilitySecondary1 { Key D Mode 1 } } }';
+   for(const bytes of [Buffer.concat([Buffer.from([239,187,191]),Buffer.from(sample)]),Buffer.concat([Buffer.from([255,254]),Buffer.from(sample,'utf16le')]),Buffer.concat([Buffer.from([254,255]),Buffer.from(sample,'utf16le').swap16()])]){
+     fs.writeFileSync(file,bytes);assert.equal(readBindings(readVdfFile(file)).keys.selectHero,'F1');assert.equal(readBindings(readVdfFile(file)).slotCastModes.slot1,'quickcast');
+   }
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
