@@ -94,3 +94,31 @@ test('VDF reader handles UTF8 BOM and both UTF16 byte orders',()=>{
    }
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('real Dota LOL and ARROW layout shapes survive account switches',()=>{
+ const {bindingUpdate}=require('../binding-sync');
+ const consoleKey='Console { Key "'+String.fromCharCode(92)+'" }';
+ const make=(quick,voice)=>{
+   const primary=['AbilityPrimary1','AbilityPrimary2','AbilityPrimary3','AbilityUltimate','AbilitySecondary1','AbilitySecondary2'];
+   const actions=[...primary,...Array.from({length:6},(_,i)=>'Inventory'+(i+1)),'InventoryNeutral','InventoryTP'];
+   const keys=quick?['Q','W','E','R','D','F','1','2','3','4','5','6','V','U']:['Q','W','E','R','V','F','A','S','D','Z','X','C','B','T'];
+   const lines=actions.map((action,i)=>{
+     if(quick&&action!=='InventoryTP')return action+' { Mode 2 } '+action+'QuickCast { Key '+keys[i]+' Mode 2 }';
+     return action+' { Key '+keys[i]+' Mode '+(quick?'2':action==='InventoryNeutral'?'-1':'0')+' }';
+   });
+   return 'KeyBindings { UseHeroBindings 0 Keys { '+consoleKey+' '+lines.join(' ')+' HeroSelect { Key '+(quick?'SPACE':'F1')+' } ChatVoiceTeam { '+(voice?'Key '+voice:'')+' Mode 0 } } Items { item_rod_of_atos { Mode 2 } } }';
+ };
+ const a=readBindings(make(true,'TAB')),b=readBindings(make(true,'')),c=readBindings(make(false,'G'));
+ assert.equal(a.keys.selectHero,'SPACE');assert.equal(a.keys.voice,'TAB');
+ assert.equal(a.slotCastModes.neutral,'quickcast');assert.equal(a.itemCastModes.item_rod_of_atos,'quickcast');
+ assert.equal(b.keys.voice,undefined);
+ const original={keys:{},voiceChatKey:'G',slotCastModes:{neutral:'click'}};
+ const first=bindingUpdate(a,original),second=bindingUpdate(b,{...original,...first});
+ assert.equal(second.voiceChatKey,'TAB');assert.equal(second.keys.slot1,'D');
+ const third=bindingUpdate(c,{...original,...second});
+ assert.equal(third.keys.slot1,'V');assert.equal(third.keys.item3,'D');assert.equal(third.keys.selectHero,'F1');assert.equal(third.voiceChatKey,'G');
+ assert.equal(third.slotCastModes.slot1,'click');assert.equal(third.slotCastModes.item1,'click');assert.equal(third.slotCastModes.neutral,undefined);
+ const gsi={at:100,hero:'npc_dota_hero_invoker',alive:true,items:[null,null,null,null,null,null,{name:'item_example',cooldown:0,can_cast:true}]};
+ assert.equal(planItem(ITEM_SLOTS[6],gsi,third,false,101).action,ACTION.SLOT2);
+ assert.equal(bindingUpdate(c,{...original,...second},false).slotCastModes.neutral,'quickcast');
+});
