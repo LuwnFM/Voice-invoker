@@ -38,3 +38,29 @@ fn mic_loss_cancels_waiting_without_slot(){
     e.enqueue(2,parser().parse("торнадо").remove(0));let r=e.poll(2).unwrap();
     e.set_ready(false);e.acknowledge(r.id,true,3);e.set_ready(true);e.accept_gsi(4,packet("invoker_tornado",true,true));assert!(e.poll(4).is_none());
 }
+
+#[test]
+fn predicted_invoke_waits_for_next_gsi_or_400ms_timeout(){
+    let p=parser();
+    let mut e=Engine::new(Config::default());e.set_ready(true);
+    e.accept_gsi(1,packet("invoker_empty1",true,true));
+    e.enqueue(6000,p.parse("торнадо").remove(0));let first=e.poll(6000).unwrap();
+    assert!(first.steps.len()>4); // no fresh GSI, full sequence
+    e.accept_gsi(6001,packet("invoker_empty1",true,true));
+    e.acknowledge(first.id,true,6002);
+    e.enqueue(6003,p.parse("метеор").remove(0));
+    assert!(e.poll(6042).is_none());
+    assert!(e.poll(6441).is_none());
+    assert!(e.poll(6442).is_none());
+    assert!(e.notices().iter().any(|n|matches!(n,Notice::Refused(_))));
+}
+#[test]
+fn new_gsi_releases_predicted_invoke_wait(){
+    let p=parser();let mut e=Engine::new(Config::default());e.set_ready(true);
+    e.accept_gsi(1,packet("invoker_empty1",true,true));
+    e.enqueue(6000,p.parse("торнадо").remove(0));let first=e.poll(6000).unwrap();
+    e.accept_gsi(6001,packet("invoker_empty1",true,true));e.acknowledge(first.id,true,6002);
+    e.enqueue(6003,p.parse("метеор").remove(0));assert!(e.poll(6042).is_none());
+    e.accept_gsi(6050,packet("invoker_tornado",true,true));
+    assert_eq!(e.poll(6050).unwrap().steps.len(),4);
+}
